@@ -3,7 +3,7 @@ remespath
 
 *DataFrame-style indexing in unstructured or semi-structured data*
 
-[//]: # ([Read the Docs] (https://remespath.readthedocs.io/en/latest/index.html))
+<!-- # ([Read the Docs] (https://remespath.readthedocs.io/en/latest/index.html)) -->
 
 
 Features
