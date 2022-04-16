@@ -6,11 +6,11 @@ projection ::= object_projection | array_projection
 object_projection ::= "{" ws key_value_pair ws ("," ws key_value_pair ws)* "}"
 array_projection ::= "{" ws expr_function ws ("," ws expr_function ws)* "}"
 key_value_pair ::= quoted_string ws ":" ws expr_function
-json ::= current_doc | json_string
-current_doc ::= "@"
+json ::= current_document | json_string
+current_document ::= "@"
 indexer_list ::= indexer+
 indexer ::= "." varname
-            | "[" ws bool_index ws "]"
+            | "[" ws boolean_index ws "]"
             | "[" ws varname_list ws "]"
             | "[" ws slicer_list ws "]"
 expr_function ::= expr
@@ -22,7 +22,7 @@ scalar_function ::= scalar
                     | scalar_function ws binop ws scalar_function
                     | scalar_arg_function
                     | "(" scalar_function ")"
-bool_index ::= expr_function
+boolean_index ::= expr_function
 expr_arg_function ::= unquoted_string ws "(" ws expr_function ws ("," ws (expr_function | scalar_function) ws)* ")"
 scalar_arg_function ::= unquoted_string ws "(" ws scalar_function ws ("," ws scalar_function ws)* ")"
 slicer_list ::= slicer ws ("," ws slicer ws)*
@@ -62,23 +62,8 @@ def bool_node(value):
     return {'type': 'bool', 'value': value}
     
 
-def bool_index(value):
-    return {'type': 'bool_index', 'children': value}
-    
-
-def cur_doc_bool_index(func):
-    '''boolean indices that are functions of a user input (use the '@' symbol).
-    '''
-    return {'type': 'cur_doc_bool_index', 'children': func}
-  
-
-EXPR_SUBTYPES = {'current_doc', 'expr'}  
-def current_doc():
-    return {'type': 'current_doc', 'value': None}
-
-
-def expr(json_):
-    return {'type': 'expr', 'value': json_}
+def boolean_index(value):
+    return {'type': 'boolean_index', 'children': value}
 
 
 # def arg_function(argfunc, subtype):
@@ -91,13 +76,17 @@ def expr(json_):
             # 'value': argfunc}
 
 
-INDEXER_SUBTYPES = {'slicer_list', 'varname_list', 'bool_index', 'cur_doc_bool_index'}
+INDEXER_SUBTYPES = {'slicer_list', 'varname_list', 'boolean_index'}
 def indexer_list(*indexers):
     return {'type': 'indexer_list', 'children': indexers}
 
 
 def int_node(value):
     return {'type': 'int', 'value': value}
+
+
+def expr(json_):
+    return {'type': 'expr', 'value': json_}
 
 
 def null_node():
