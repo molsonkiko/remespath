@@ -149,7 +149,6 @@ class ArgFunction(typing.NamedTuple):
     min_args: float
     max_args: float
     # if the number of args taken is inf, it's a *args function
-    # I'm not yet sure what to do with arg_types.
     arg_types: typing.List[typing.Set[str]]
     is_vectorized: bool
     # if is_vectorized is True, func is applied to every element of an 

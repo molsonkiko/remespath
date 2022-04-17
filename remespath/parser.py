@@ -174,7 +174,7 @@ def apply_indexer_list(obj, indexers):
         if not isinstance(children, (list, dict)):
             return obj if children else None
     result = idx_func(obj)
-    RemesPathLogger.info(f"In apply_indexer_list, {idxr = }, {obj = }, {result = }")
+    RemesPathLogger.info(f"In apply_indexer_list, idxr = {idxr}, obj = {obj}, result = {result}")
     is_dict = isinstance(obj, dict)
     has_one_option = False
     k = None
@@ -236,23 +236,43 @@ def binop_json_scalar(func, j, s):
 
 
 def apply_arg_function(func, out_types, *args):
+    raise NotImplementedError
+    avals = [a['value'] for a in args]
     x = args[0]
-    other_args = [None if x is None else x['value'] for x in args[1:]]
-    xval = x['value']
+    other_args = []
+    xval = avals[0]
     xtype = x['type']
+    x_callable = hasattr(xval, '__call__') # is a function
+    other_callables = False
+    for arg in avals[1:]:
+        if arg is None:
+            other_args.append(arg)
+        else:
+            if hasattr(arg, '__call__'):
+                other_callables = True
+            other_args.append(arg)
     out_type = None
-    if isinstance(out_types, list):
+    if x_callable:
+        out_type = 'cur_json_func' 
+    elif isinstance(out_types, list):
         out_type = out_types[0] if xtype == 'expr' else out_types[1]
     elif out_types == '?':
         out_type = xtype
     else:
         out_type = out_types
     ast_tok_builder = AST_TOK_BUILDER_MAP[out_type]
-    if x['type'] == 'expr':
-        if isinstance(xval, dict):
-            return ast_tok_builder({k: func(v, *other_args) for v in xval.items()})
-        elif isinstance(xval, list):
+    if xtype == 'expr':
+        if other_callables:
+            if isinstance(xval, dict):
+                return lambda inp: ast_tok_builder({k: func(v, *[a if not hasattr(a, '__call__') else a(inp) for a in other_args]) for k, v in xval.items()})
+            elif isinstance(xval, list):
+                return lambda inp: ast_tok_builder([func(v, *[a if not hasattr(a, '__call__') else a(inp) for a in other_args]) for v in xval])
+        elif isinstance(xval, dict):
+            return ast_tok_builder({k: func(v, *other_args) for k, v in xval.items()})
+        else:
             return ast_tok_builder([func(v, *other_args) for v in xval])
+    elif x_callable:
+        raise NotImplementedError
     return ast_tok_builder(func(xval, *other_args))
 
 
@@ -266,66 +286,12 @@ def peek_next_token(x, ii):
     return x[ii + 1]
 
 
-def parse_quoted_string(s, string_type_modifier=''):
-    mtch = quoted_string_match(s)
-    try:
-        out = mtch.groups()[0].replace('\\`', '`')
-    except:
-        raise RemesParserException("Unterminated string literal")
-    RemesPathLogger.debug(f'{s = }')
-    if string_type_modifier == 'json':
-        try:
-            return expr(json.loads(out))
-        except json.JSONDecodeError as ex:
-            raise RemesParserException(f"Malformed json ({ex})")
-    elif string_type_modifier == 'regex':
-        try:
-            return regex(re.compile(out))
-        except Exception as ex:
-            raise RemesParserException(f"Malformed regex ({ex})")
-    return quoted_string(out)
-
-
-def parse_unquoted_string(s):
-    '''parse any unquoted string. This includes function names, names of
-special constants like true and NaN, and names of keys in iterables.
-Thus, this can return any of the following AST node types: expr_function, binop, bool, null, num, or (most commonly) unquoted_string.
-    '''
-    if s in FUNCTIONS:
-        return expr_function(*FUNCTIONS[s])
-    if s in BINOPS:
-        return binop_function(BINOPS[s])
-    if s in CONSTANTS:
-        val = CONSTANTS[s]
-        if isinstance(val, bool):
-            return bool_node(val)
-        if val is None:
-            return null_node()
-        else:
-            # remaining special cases are NaN and +/-Infinity, both floats
-            return num(val)
-    return unquoted_string(s)
-
-
-def parse_num(query, uminus):
-    multiplier = -1 if uminus else 1
-    mtch = num_match(query)
-    grps = mtch.groups()
-    if not (grps[1] or grps[2]):
-        return int_node(int(grps[0]) * multiplier)
-    elif grps[1]:
-        new_obj = float(grps[0] + grps[1] if not grps[2] else ''.join(grps))
-    else:
-        new_obj = float(grps[0] + grps[2])
-    return num(new_obj * multiplier)
-
-
 def parse_slicer(query, jsnode, ii, first_num):
     grps = []
     last_num = first_num
     end = ii
     while end < len(query):
-        RemesPathLogger.debug(f'in parse_slicer, {query[end] = }, {grps = }')
+        RemesPathLogger.debug(f'in parse_slicer, query[end] = {query[end]}, grps = {grps}')
         if query[end] == ':':
             grps.append(last_num)
             last_num = None
@@ -342,85 +308,79 @@ def parse_slicer(query, jsnode, ii, first_num):
         if len(grps) == 2:
             break
     grps.append(last_num)
-    RemesPathLogger.debug(f'at parse_slicer return, {query = }, {end = }, {grps = }')
+    RemesPathLogger.debug(f'at parse_slicer return, query = {query}, end = {end}, grps = {grps}')
     return slicer(grps), end - 1
 
 
 def parse_indexer(query, jsnode, ii):
-    last_tok = None
     t = query[ii]
-    if t == '.':
+    typ = t['type']
+    tv = t.get('value')
+    if tv == '.':
         nt = peek_next_token(query, ii)
-        if not nt:
-            raise RemesParserException("Expected token after '.'", ii, query)
-        if nt[:2] == 'g`':
-            last_tok = parse_quoted_string(nt[2:], 'regex')
-        elif nt[0] == '`':
-            last_tok = parse_quoted_string(nt[1:])
-        elif re.match('[a-zA-Z_]', nt):
-            try:
-                last_tok = parse_unquoted_string(nt)
-                assert last_tok['type'] == 'unquoted_string'
-            except Exception as ex:
-                raise RemesParserException('Indexer starting with "." must have exactly one varname', ii, query)
-        else:
-            raise RemesParserException('Indexer starting with "." must have exactly one varname', ii, query)
-        return varname_list([last_tok['value']]), ii + 1
-    elif query[ii] != '[':
+        if nt['type'] not in VARNAME_SUBTYPES:
+            raise RemesParserException("'.' syntax for indexers only allows a single key or regex as indexer", ii, query)
+        return varname_list([nt['value']]), ii + 1
+    elif tv != '[':
         raise RemesParserException('Indexer must start with "." or "["', ii, query)
     children = []
     indexer = None
+    last_tok = None
+    last_type = None
     ii += 1
     while ii < len(query):
         t = query[ii]
-        c = t[0]
-        RemesPathLogger.debug(f'in parse_indexer, {last_tok = }, {c = }, {ii = }')
-        if c == ']':
+        typ, tv = t['type'], t.get('value')
+        RemesPathLogger.debug(f'in parse_indexer, last_tok = {last_tok}, ii = {ii}')
+        if tv == ']':
             children.append(last_tok['value'])
             if not indexer:
-                if last_tok['type'] in VARNAME_SUBTYPES:
+                if last_type in VARNAME_SUBTYPES:
                     indexer = varname_list(children)
-                elif last_tok['type'] in ['slicer', 'int']:
+                elif last_type in ['slicer', 'int']:
                     indexer = slicer_list(children)
                 else:
                     indexer = boolean_index(last_tok['value'])
-            if (indexer['type'] == 'slicer_list' and last_tok['type'] not in SLICER_SUBTYPES) \
-            or (indexer['type'] == 'varname_list' and last_tok['type'] not in VARNAME_SUBTYPES):
+            if (indexer['type'] == 'slicer_list' and last_type not in SLICER_SUBTYPES) \
+            or (indexer['type'] == 'varname_list' and last_type not in VARNAME_SUBTYPES):
                 raise RemesParserException("Cannot have indexers with a mix of ints/slicers and strings", ii, query)
             return indexer, ii + 1
-        elif last_tok and c != ',' and c != ':':
+        elif last_tok and tv != ',' and tv != ':':
             raise RemesParserException("Consecutive indexers must be separated by commas", ii, query)
-        elif c == ',':
+        elif tv == ',':
             # figure out how to deal with slices
             # if not all(x is None
             if not indexer:
-                if last_tok['type'] in VARNAME_SUBTYPES:
+                if last_type in VARNAME_SUBTYPES:
                     indexer = varname_list([])
-                elif last_tok['type'] in SLICER_SUBTYPES:
+                elif last_type in SLICER_SUBTYPES:
                     indexer = slicer_list([])
                 children = indexer['children']
-            elif (indexer['type'] == 'slicer_list' and last_tok['type'] not in SLICER_SUBTYPES) \
-            or (indexer['type'] == 'varname_list' and last_tok['type'] not in VARNAME_SUBTYPES):
+            elif (indexer['type'] == 'slicer_list' and last_type not in SLICER_SUBTYPES) \
+            or (indexer['type'] == 'varname_list' and last_type not in VARNAME_SUBTYPES):
                 raise RemesParserException("Cannot have indexers with a mix of ints/slicers and strings", ii, query)
             children.append(last_tok['value'])
             last_tok = None
+            last_type = None
             ii += 1
-        elif c == ':':
+        elif tv == ':':
             if last_tok is None:
                 last_tok, ii = parse_slicer(query, jsnode, ii, None)
-            elif last_tok['type'] == 'int':
+            elif last_type == 'int':
                 last_tok, ii = parse_slicer(query, jsnode, ii, last_tok['value'])
             else:
                 raise RemesParserException(f"Expected token other than ':' after {last_tok} in an indexer", ii, query)
             ii += 1
+            last_type = last_tok['type']
         else:
             last_tok, ii = parse_expr_or_scalar_func(query, jsnode, ii)
+            last_type = last_tok['type']
     raise RemesParserException("Unterminated indexer (EOF)")
 
 
 def resolve_binop(binop, a, b):
     '''apply a binop to two args that are exprs or scalars'''
-    RemesPathLogger.info(f"In resolve_binop, {binop = }, {a = }, {b = }")
+    RemesPathLogger.info(f"In resolve_binop, binop = {binop}, a = {a}, b = {b}")
     aval, bval = a['value'], b['value']
     atype, btype = a['type'], b['type']
     if atype == 'expr':
@@ -435,7 +395,7 @@ def resolve_binop(binop, a, b):
 
 def resolve_binop_tree(binop, a, b):
     '''applies a binop to two args that are exprs, scalars, or other binops'''
-    RemesPathLogger.info(f"In resolve_binop_tree, {binop = }, {a = }, {b = }")
+    RemesPathLogger.info(f"In resolve_binop_tree, binop = {binop}, a = {a}, b = {b}")
     if a['type'] == 'binop':
         a = resolve_binop_tree(a['value'][0], *a['children'])
     if b['type'] == 'binop':
@@ -449,27 +409,20 @@ Does not resolve binops.'''
     if not query:
         raise RemesParserException("Empty query")
     t = query[ii]
-    c = t[0]
-    RemesPathLogger.info(f"in parse_expr_or_scalar, {t = }, {ii = }")
-    if c == '@':
-        last_tok = jsnode
-        ii += 1
-    elif c == '-':
-        last_tok, ii = parse_arg_function(query, jsnode, ii, '-')
-    elif c in NUM_START_CHARS:
-        last_tok = parse_num(t, False)
-        ii += 1
-    elif c == '`':
-        last_tok = parse_quoted_string(t[1:], '')
-        ii += 1
-    elif c == '(':
+    typ = t['type']
+    tv = t.get('value')
+    RemesPathLogger.info(f"in parse_expr_or_scalar, t = {t}, ii = {ii}")
+    if typ == 'binop':
+        raise RemesParserException("Binop without appropriate operands", ii, query)
+    elif tv == '(':
         unclosed_parens = 1
         subquery = []
         for end in range(ii + 1, len(query)):
             subtok = query[end]
-            if subtok == '(':
+            subval = subtok.get('value')
+            if subval == '(':
                 unclosed_parens += 1
-            elif subtok == ')':
+            elif subval == ')':
                 unclosed_parens -= 1
                 if unclosed_parens == 0:
                     last_tok, subii = parse_expr_or_scalar_func(subquery, jsnode, 0)
@@ -478,45 +431,23 @@ Does not resolve binops.'''
             subquery.append(subtok)
         if unclosed_parens:
             raise RemesParserException("Unmatched '('", ii, query)
+    elif typ == 'arg_function':
+        last_tok, ii = parse_arg_function(query, jsnode, ii+1, t)
     else:
-        if not re.match('[a-zA-Z_]', c):
-            raise RemesParserException(f"Char '{c}' can't begin an expr or scalar", ii, query)
+        last_tok = t
         ii += 1
-        if t[:2] == 'g`':
-            last_tok = parse_quoted_string(t[2:], 'regex')
-        elif t[:2] == 'j`':
-            last_tok = parse_quoted_string(t[2:], 'json')
-        elif t in FUNCTIONS:
-            last_tok, ii = parse_arg_function(query, jsnode, ii, t)
-        elif t in BINOPS:
-            raise RemesParserException(f"Found binop '{t}' without left arg", ii, query)
-        else:
-            last_tok = parse_unquoted_string(t)
     if last_tok['type'] == 'expr':
         idxrs = []
         cur_idxr = None
         # check if the expr has any indexers
         while True:
-            delim = peek_next_token(query, ii - 1)
-            if delim == '.':
-                cur_idxr = query[ii:ii+2]
-                ii += 2
-            elif delim == '[':
-                cur_idxr = []
-                open_sqbk_ct = 1
-                while ii < len(query):
-                    tok = query[ii]
-                    cur_idxr.append(tok)
-                    if tok == ']':
-                        open_sqbk_ct -= 1
-                        if open_sqbk_ct == 0:
-                            break
-                    ii += 1
-                ii += 1
+            nt = peek_next_token(query, ii - 1) 
+            if nt['type'] == 'delim' and nt['value'] in {'.', '['}:
+                cur_idxr, ii = parse_indexer(query, jsnode, ii)
+                RemesPathLogger.info(f"In parse_expr_or_scalar, found indexer {cur_idxr}")
+                idxrs.append(cur_idxr)
             else:
                 break
-            RemesPathLogger.info(f"In parse_expr_or_scalar, found indexer {cur_idxr}")
-            idxrs.append(cur_idxr)
         if idxrs:
             result = apply_indexer_list(last_tok['value'], idxrs)
             last_tok = AST_TYPE_BUILDER_MAP[type(result)](result)
@@ -537,23 +468,23 @@ def parse_expr_or_scalar_func(query, jsnode, ii):
     func = None
     precedence = None
     while ii < len(query):
-        t = query[ii]
-        if t in EXPR_FUNC_ENDERS:
+        left_tok = curtok
+        left_type = '' if not left_tok else left_tok['type']
+        curtok = query[ii]
+        tv = curtok.get('value')
+        typ = curtok['type']
+        if typ == 'delim' and tv in EXPR_FUNC_ENDERS:
             if not curtok:
                 raise RemesParserException("No expression found where expr or scalar expected", ii, query)
             break
-        left_tok = curtok
-        left_type = '' if not left_tok else left_tok['type']
-        is_binop = BINOPS.get(t)
-        if is_binop:
+        if typ == 'binop':
             if left_tok is None or left_tok['type'] == 'binop':
-                if t != '-':
+                if tv != '-':
                     raise RemesParserException("Binop with invalid left operand", ii, query)
                 uminus = not uminus
             else:
-                curtok = binop_function(*is_binop)
                 children = curtok['children']
-                func, precedence = is_binop
+                func, precedence = tv
                 show_precedence = precedence
                 if func == pow:
                     show_precedence += 0.1
@@ -594,7 +525,7 @@ def parse_expr_or_scalar_func(query, jsnode, ii):
                     left_operand = apply_arg_function(operator.neg, '?', left_operand)
                     uminus = False
             curtok = left_operand
-        RemesPathLogger.info(f'In parse_expr_or_scalar_func, {root = }, {t = }, {uminus = }')
+        RemesPathLogger.info(f'In parse_expr_or_scalar_func, root = {root},curtok = {curtok}, uminus = {uminus}')
     if root:
         branch_children[1] = curtok
         RemesPathLogger.debug(f'parse_expr_or_scalar_func resolves binop:\n{root}')
@@ -603,29 +534,25 @@ def parse_expr_or_scalar_func(query, jsnode, ii):
     return left_operand, ii
 
 
-def parse_arg_function(query, jsnode, ii, funcname):
+def parse_arg_function(query, jsnode, ii, argfunc):
     '''Handles functions that accept arguments using the "(" arg ("," arg)* ")"
 syntax.
 This is relevant to both the expr_function and scalar_function parts of the
 grammar, because it is agnostic about the types of arguments received
     '''
-    argfunc = FUNCTIONS[funcname]
-    if query[ii] != '(': # and funcname != '-':
+    children = argfunc['children']
+    func, out_type, min_args, max_args, arg_types, is_vectorized = argfunc['value']
+    if query[ii] != '(':
         raise RemesParserException(f"Function '{funcname}' must have parens surrounding arguments", ii, query)
     ii += 1
-    func, out_types, min_args, max_args, arg_types, is_vectorized = argfunc
-    if argfunc.max_args == inf:
-        args = []
-    else:
-        args = [None for ii in range(argfunc.max_args)]
     arg_num = 0
     cur_arg = None
     while ii < len(query):
         t = query[ii]
         c = t[0]
-        type_options = arg_types[arg_num]
+        type_options = argfunc.arg_types[arg_num]
         # try to parse the current argument as one of the valid types
-        RemesPathLogger.debug(f'In parse_arg_function, {t = }, {funcname = }, {query = }, {ii = }, {type_options = }, {arg_num = }')
+        RemesPathLogger.debug(f'In parse_arg_function, t = {t}, argfunc = {argfunc}, query = {query}, ii = {ii}, arg_num = {arg_num}')
         try:
             try:
                 cur_arg, ii = parse_expr_or_scalar_func(query, jsnode, ii)
@@ -640,7 +567,7 @@ grammar, because it is agnostic about the types of arguments received
             raise RemesParserException(f"For arg {arg_num} of function {funcname}, expected argument of a type in {type_options}, instead raised exception:\n{str(ex)}")
         # if funcname == '-':
             # # uminus doesn't require parens around its single argument.
-            # RemesPathLogger.debug(f'at return of parse_arg_function, {func = }, {out_types = }, {args = }')
+            # RemesPathLogger.debug(f'at return of parse_arg_function, func = {func}, out_types = {out_types}, args = {args}')
             # return apply_arg_function(func, out_types, [cur_arg]), ii
         c = query[ii]
         if arg_num + 1 < min_args and c != ',':
@@ -654,7 +581,7 @@ grammar, because it is agnostic about the types of arguments received
         arg_num += 1
         ii += 1
         if c == ')':
-            RemesPathLogger.debug(f'at return of parse_arg_function, {func = }, {out_types = }, {args = }')
+            RemesPathLogger.debug(f'at return of parse_arg_function, func = {func}, out_types = {out_types}, args = {args}')
             if is_vectorized:
                 return apply_arg_function(func, out_types, *args), ii
             out = func(*[None if x is None else x['value'] for x in args])
@@ -686,20 +613,6 @@ def search(query, obj):
     toks = tokenize(query)
     result = parse_expr_or_scalar_func(toks, expr(obj), 0)
     return result[0]['value']
-
-
-TYPE_PARSER_MAP = {
-    'expr_function': parse_expr_or_scalar_func,
-    'scalar_function': parse_expr_or_scalar_func,
-    'expr': parse_expr_or_scalar_func,
-    'int': parse_num,
-    'num': parse_num,
-    'regex': parse_quoted_string,
-    'quoted_string': parse_quoted_string,
-    'slicer': parse_slicer,
-    'unquoted_string': parse_unquoted_string,
-    'bool': parse_unquoted_string,
-}
 
 
 #################

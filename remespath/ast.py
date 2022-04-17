@@ -6,8 +6,8 @@ projection ::= object_projection | array_projection
 object_projection ::= "{" ws key_value_pair ws ("," ws key_value_pair ws)* "}"
 array_projection ::= "{" ws expr_function ws ("," ws expr_function ws)* "}"
 key_value_pair ::= quoted_string ws ":" ws expr_function
-json ::= current_document | json_string
-current_document ::= "@"
+json ::= current_json | json_string
+current_json ::= "@"
 indexer_list ::= indexer+
 indexer ::= "." varname
             | "[" ws boolean_index ws "]"
@@ -50,6 +50,15 @@ import re
 inf = float('inf')
 
 
+def arg_function(argfunc):
+    if argfunc.max_args == inf:
+        args = []
+    else:
+        args = [None for ii in range(argfunc.max_args)]
+    return {'type': 'arg_function', 
+            'children': args, 
+            'value': argfunc}
+
 def array_projection(children):
     return {'type': 'array_projection', 'children': children}
     
@@ -66,14 +75,18 @@ def boolean_index(value):
     return {'type': 'boolean_index', 'children': value}
 
 
-# def arg_function(argfunc, subtype):
-    # if argfunc.max_args == inf:
-        # args = []
-    # else:
-        # args = [None for ii in range(argfunc.max_args)]
-    # return {'type': f'{subtype}_arg_function', 
-            # 'children': args, 
-            # 'value': argfunc}
+def current_json():
+    return {'type': 'current', 'value': lambda x: x}
+    
+    
+def current_json_function(func):
+    '''a function of the current node. Undefined at compile time'''
+    return {'type': 'cur_json_func', 'value': func}
+
+
+def delim(value):
+    '''any one of ,()[]{}:.'''
+    return {'type': 'delim', 'value': value}
 
 
 INDEXER_SUBTYPES = {'slicer_list', 'varname_list', 'boolean_index'}
@@ -85,6 +98,7 @@ def int_node(value):
     return {'type': 'int', 'value': value}
 
 
+EXPR_SUBTYPES = {'expr', 'current', 'cur_json_func'}
 def expr(json_):
     return {'type': 'expr', 'value': json_}
 
@@ -99,10 +113,6 @@ def num(value):
 
 def object_projection(children):
     return {'type': 'object_projection', 'children': children}
-
-
-def quoted_string(value):
-    return {'type': 'quoted_string', 'value': value}
 
 
 def regex(value):
@@ -124,8 +134,8 @@ def slicer_list(slicers):
     return {'type': 'slicer_list', 'children': slicers}
 
 
-def unquoted_string(value):
-    return {'type': 'unquoted_string', 'value': value}
+def string(value):
+    return {'type': 'string', 'value': value}
 
 
 VARNAME_SUBTYPES = {'unquoted_string', 'quoted_string', 'regex'}
@@ -148,13 +158,12 @@ AST_TOK_BUILDER_MAP = {
     'null': null_node,
     'num': num,
     'object_projection': object_projection,
-    'quoted_string': quoted_string,
     'regex': regex,
     'scalar': scalar,
     # 'scalar_arg_function': arg_function,
     'slicer': slicer,
     'slicer_list': slicer_list,
-    'unquoted_string': unquoted_string,
+    'string': string,
     'varname_list': varname_list,
 }
 
@@ -165,5 +174,5 @@ AST_TYPE_BUILDER_MAP = {
     int: int_node,
     list: expr,
     re.Pattern: regex,
-    str: quoted_string,
+    str: string,
 }
