@@ -165,47 +165,47 @@ class ArgFunction(typing.NamedTuple):
 
 
 FUNCTIONS = {
-    'flatten': ArgFunction(flatten, 'expr', 1, 2, [{'expr'}, {'int'}], False),
+    'flatten': ArgFunction(flatten, 'expr', 1, 2, [EXPR_SUBTYPES, {'int'}], False),
     'irange': ArgFunction(irange, 'expr', 1, 3, [{'int'}, {'int'}, {'int'}], False),
-    'keys': ArgFunction(dict.keys, 'expr', 1, 1, [{'expr'}], False),
-    'len': ArgFunction(len, 'int', 1, inf, [{'expr'}], False),
-    'max': ArgFunction(max, 'num', 1, inf, [{'expr'}], False),
-    'max_by': ArgFunction(max_by, 'num', 2, 2, [{'expr'}, {'string', 'cur_json_func'}], False),
-    'min': ArgFunction(min, 'num', 1, inf, [{'expr'}], False),
-    'min_by': ArgFunction(min_by, 'num', 2, 2, [{'expr'}, {'string', 'cur_json_func'}], False),
-    's_join': ArgFunction(str.join, 'string', 2, 2, [{'string'}, {'expr'}], False),
-    'sort_by': ArgFunction(sort_by, 'expr', 2, 3, [{'expr'}, {'bool'}, {'string', 'cur_json_func'}], False),
-    'sorted': ArgFunction(sort_func, 'expr', 1, 2, [{'expr'}, {'bool'}], False),
-    'sum': ArgFunction(sum, 'num', 1, 1, [{'expr'}], False),
-    'values': ArgFunction(dict.values, 'expr', 1, 1, [{'expr'}], False),
+    'keys': ArgFunction(dict.keys, 'expr', 1, 1, [EXPR_SUBTYPES], False),
+    'len': ArgFunction(len, 'int', 1, inf, [EXPR_SUBTYPES], False),
+    'max': ArgFunction(max, 'num', 1, inf, [EXPR_SUBTYPES], False),
+    'max_by': ArgFunction(max_by, 'num', 2, 2, [EXPR_SUBTYPES, {'string', 'cur_json_func'}], False),
+    'min': ArgFunction(min, 'num', 1, inf, [EXPR_SUBTYPES], False),
+    'min_by': ArgFunction(min_by, 'num', 2, 2, [EXPR_SUBTYPES, {'string', 'cur_json_func'}], False),
+    's_join': ArgFunction(str.join, 'string', 2, 2, [{'string'}, EXPR_SUBTYPES], False),
+    'sort_by': ArgFunction(sort_by, 'expr', 2, 3, [EXPR_SUBTYPES, {'bool'}, {'string', 'cur_json_func'}], False),
+    'sorted': ArgFunction(sort_func, 'expr', 1, 2, [EXPR_SUBTYPES, {'bool'}], False),
+    'sum': ArgFunction(sum, 'num', 1, 1, [EXPR_SUBTYPES], False),
+    'values': ArgFunction(dict.values, 'expr', 1, 1, [EXPR_SUBTYPES], False),
     # the below functions are all vectorized
     # the '?' for out_type means that the output type is same as input
     # if there's a list of two output types, the first is the output type if
     # it's an expr, the second is the output type if it's a scalar
-    # '-': ArgFunction(operator.neg, '?', 1, 1, [{'expr', 'num', 'int'}], True),
-    'abs': ArgFunction(abs, '?', 1, 1, [{'expr', 'num', 'int'}], True),
-    'float': ArgFunction(float, ['expr', 'num'], 1, 1, [{'expr', 'int', 'string', 'num', 'bool'}], True),
-    'ifelse': ArgFunction(ifelse, '?', 3, 3, [{'expr', 'bool'}, SCALAR_SUBTYPES, SCALAR_SUBTYPES], True),
-    'int': ArgFunction(int, ['expr', 'int'], 1, 1, [{'expr', 'num', 'string', 'int', 'bool'}], True),
+    # '-': ArgFunction(operator.neg, '?', 1, 1, [EXPR_SUBTYPES | {'num', 'int'}], True),
+    'abs': ArgFunction(abs, '?', 1, 1, [EXPR_SUBTYPES | {'num', 'int'}], True),
+    'float': ArgFunction(float, ['expr', 'num'], 1, 1, [EXPR_SUBTYPES | {'int', 'string', 'num', 'bool'}], True),
+    'ifelse': ArgFunction(ifelse, '?', 3, 3, [EXPR_SUBTYPES | {'bool'}, SCALAR_SUBTYPES, SCALAR_SUBTYPES], True),
+    'int': ArgFunction(int, ['expr', 'int'], 1, 1, [EXPR_SUBTYPES | {'num', 'string', 'int', 'bool'}], True),
     'is_expr': ArgFunction(bool, ['expr', 'bool'], 1, 1, [ALL_BASE_SUBTYPES], True),
     'is_num': ArgFunction(bool, ['expr', 'bool'], 1, 1, [ALL_BASE_SUBTYPES], True),
     'is_str': ArgFunction(bool, ['expr', 'bool'], 1, 1, [ALL_BASE_SUBTYPES], True),
-    'isna': ArgFunction(math.isnan, ['expr', 'bool'], 1, 1, [{'expr', 'num'}], True),
-    'log': ArgFunction(math.log, ['expr', 'num'], 1, 2, [{'expr', 'num', 'int'}], True),
-    'log2': ArgFunction(math.log2, ['expr', 'num'], 1, 1, [{'expr', 'num', 'int'}], True),
+    'isna': ArgFunction(math.isnan, ['expr', 'bool'], 1, 1, [EXPR_SUBTYPES | {'num'}], True),
+    'log': ArgFunction(math.log, ['expr', 'num'], 1, 2, [EXPR_SUBTYPES | {'num', 'int'}], True),
+    'log2': ArgFunction(math.log2, ['expr', 'num'], 1, 1, [EXPR_SUBTYPES | {'num', 'int'}], True),
     'not': ArgFunction(operator.not_, ['expr', 'bool'], 1, 1, [SCALAR_SUBTYPES], True),
-    'round': ArgFunction(round, ['expr', 'num'], 1, 2, [{'expr', 'num', 'int', 'bool'}, 'int'], True),
-    's_count': ArgFunction(str_count, ['expr', 'int'], 2, 2, [{'expr', 'string'}, {'regex', 'string'}], True),
-    's_find': ArgFunction(str_find, 'expr', 2, 3, [{'expr', 'string'}, {'regex', 'string'}, {'int'}], True),
-    's_len': ArgFunction(str_len, ['expr', 'int'], 1, 1, [{'expr', 'string'}], True),
+    'round': ArgFunction(round, ['expr', 'num'], 1, 2, [EXPR_SUBTYPES | {'num', 'int', 'bool'}, 'int'], True),
+    's_count': ArgFunction(str_count, ['expr', 'int'], 2, 2, [EXPR_SUBTYPES | {'string'}, {'regex', 'string'}], True),
+    's_find': ArgFunction(str_find, 'expr', 2, 3, [EXPR_SUBTYPES | {'string'}, {'regex', 'string'}, {'int'}], True),
+    's_len': ArgFunction(str_len, ['expr', 'int'], 1, 1, [EXPR_SUBTYPES | {'string'}], True),
     # s_mul is unnecessary in Python, but it should be part of the language
     # spec for convenience in other languages
-    's_mul': ArgFunction(str_mul, ['expr', 'string'], 2, 2, [{'expr', 'string'}, {'int'}], True),
-    's_slice': ArgFunction(str.__getitem__, ['expr', 'string'], 2, 2, [{'expr', 'string'}, {'slicer', 'int'}], True),
-    's_split': ArgFunction(str_split, 'expr', 2, 3, [{'expr', 'string'}, {'regex', 'string'}, {'int'}], True),
-    's_sub': ArgFunction(str_sub, ['expr', 'string'], 3, 4, [{'expr', 'string'}, {'regex', 'string'}, {'string'}, {'int'}], False),
+    's_mul': ArgFunction(str_mul, ['expr', 'string'], 2, 2, [EXPR_SUBTYPES | {'string'}, {'int'}], True),
+    's_slice': ArgFunction(str.__getitem__, ['expr', 'string'], 2, 2, [EXPR_SUBTYPES | {'string'}, {'slicer', 'int'}], True),
+    's_split': ArgFunction(str_split, 'expr', 2, 3, [EXPR_SUBTYPES | {'string'}, {'regex', 'string'}, {'int'}], True),
+    's_sub': ArgFunction(str_sub, ['expr', 'string'], 3, 4, [EXPR_SUBTYPES | {'string'}, {'regex', 'string'}, {'string'}, {'int'}], False),
     'str': ArgFunction(str, ['expr', 'string'], 1, 1, [ALL_BASE_SUBTYPES], True),
 }
 
 for meth in ['lower', 'upper', 'strip']:
-    FUNCTIONS[f's_{meth}'] = ArgFunction(getattr(str, meth), ['expr', 'string'], 1, 1, [{'expr', 'string'}], True)
+    FUNCTIONS[f's_{meth}'] = ArgFunction(getattr(str, meth), ['expr', 'string'], 1, 1, [EXPR_SUBTYPES | {'string'}], True)

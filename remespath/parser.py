@@ -77,13 +77,13 @@ num_match = num_regex = re.compile(("(-?(?:0|[1-9]\d*))"   # any int or 0
                 "(\.\d+)?" # optional decimal point and digits after
                 "([eE][-+]?\d+)?" # optional scientific notation
                 )).match
-quoted_string_match = re.compile((
+string_match = re.compile((
     r'((?:[^`]' # any number of (non-backtick characters...
     r'|(?<=\\)`)*)' # or backticks preceded by a backslash)
     r'(?<!\\)`')).match # terminated by a backtick not preceded by a backslash
 int_match = re.compile('(-?\d+)').match
 
-unquoted_string_match = re.compile("[a-zA-Z_][a-zA-Z_0-9]*").match
+string_match = re.compile("[a-zA-Z_][a-zA-Z_0-9]*").match
 
 EXPR_FUNC_ENDERS = {']', ':', '}', ',', ')'}
 # these tokens have high enough precedence to stop an expr_function or scalar_function
@@ -145,6 +145,27 @@ inds: a list of indices or keys to select'''
                 # k is a slice
                 out.extend(x[k])
         return out
+    # x is a function
+    def outfunc(obj):
+        fun = x(obj)
+        if isinstance(fun, dict):
+            out = {}
+            for k in inds:
+                if isinstance(k, re.Pattern):
+                    out.update(apply_regex_index(fun, k))
+                elif k in x:
+                    out[k] = fun[k]
+            return out
+        out = []
+        for k in inds:
+            if isinstance(k, int):
+                if k < len(fun):
+                    out.append(fun[k])
+            else:
+                # k is a slice
+                out.extend(fun[k])
+        return out
+    return outfunc
 
 
 def apply_boolean_index(x, inds):
@@ -169,7 +190,7 @@ def apply_indexer_list(obj, indexers):
     idxr = indexers[0]
     idx_func = None
     ixtype = idxr['type']
-    children = idxr['children']
+    children = idxr.get('children')
     if ixtype[-5:] == '_list':
         # varname_list (e.g. [bar,baz], .foo) or slicer_list (e.g. [0], [1,2:])
         idx_func = lambda x: apply_multi_index(x, children)
@@ -177,7 +198,7 @@ def apply_indexer_list(obj, indexers):
         # a static boolean index (based on some JSON defined within the query)
         # something like j`[true,false,true]`
         return apply_boolean_index(obj, idxr['value'])
-    else: 
+    else:
         # it's a boolean index based on the current object (a cur_json_func)
         # something like [@.bar <= @.baz]
         return apply_boolean_index(obj, idxr['value'](obj))
@@ -288,8 +309,9 @@ def resolve_binop_tree(binop, a, b):
 
 
 def apply_arg_function(func, out_types, is_vectorized, *args):
+    RemesPathLogger.debug(f"In apply_arg_function, func = {func}, out_types={out_types}, is_vectorized={is_vectorized}, args={args}")
     if is_vectorized:
-        avals = [a['value'] for a in args]
+        avals = [a if not a else a['value'] for a in args]
         x = args[0]
         xval = avals[0]
         xtype = x['type']
@@ -336,7 +358,7 @@ def apply_arg_function(func, out_types, is_vectorized, *args):
             return lambda inp: ast_tok_builder(xval, *[a if not is_callable(a) else a(inp) for a in other_args])
         return ast_tok_builder(func(xval, *other_args))
     # the following is if it's NOT vectorized
-    avals = [a['value'] for a in args]
+    avals = [a if not a else a['value'] for a in args]
     x = args[0]
     other_args = []
     xval = avals[0]
@@ -354,7 +376,7 @@ def apply_arg_function(func, out_types, is_vectorized, *args):
         return lambda inp: ast_tok_builder(func(inp, *other_args))
     elif other_callables:
         return lambda inp: ast_tok_builder(func(xval, *[a if not is_callable(a) else a(inp) for a in other_args]))
-    return ast_tok_builder(func(avals))
+    return ast_tok_builder(func(*avals))
 
 
 ################
@@ -418,6 +440,8 @@ def parse_indexer(query, jsnode, ii):
         typ, tv = t['type'], t.get('value')
         RemesPathLogger.debug(f'in parse_indexer, last_tok = {last_tok}, ii = {ii}')
         if tv == ']':
+            if not last_tok:
+                raise RemesParserException("Empty indexer", ii, query)
             children.append(last_tok['value'])
             if not indexer:
                 if last_type in VARNAME_SUBTYPES:
@@ -425,7 +449,7 @@ def parse_indexer(query, jsnode, ii):
                 elif last_type in ['slicer', 'int']:
                     indexer = slicer_list(children)
                 else:
-                    indexer = boolean_index(last_tok['value'])
+                    indexer = cur_json_func(last_tok['value'])
             if (indexer['type'] == 'slicer_list' and last_type not in SLICER_SUBTYPES) \
             or (indexer['type'] == 'varname_list' and last_type not in VARNAME_SUBTYPES):
                 raise RemesParserException("Cannot have indexers with a mix of ints/slicers and strings", ii, query)
@@ -444,6 +468,8 @@ def parse_indexer(query, jsnode, ii):
             elif (indexer['type'] == 'slicer_list' and last_type not in SLICER_SUBTYPES) \
             or (indexer['type'] == 'varname_list' and last_type not in VARNAME_SUBTYPES):
                 raise RemesParserException("Cannot have indexers with a mix of ints/slicers and strings", ii, query)
+            if not last_tok:
+                raise RemesParserException("Comma before first entry in indexer list.", ii, query)
             children.append(last_tok['value'])
             last_tok = None
             last_type = None
@@ -511,6 +537,7 @@ Does not resolve binops.'''
         if idxrs:
             result = apply_indexer_list(last_tok['value'], idxrs)
             last_tok = AST_TYPE_BUILDER_MAP[type(result)](result)
+            ii += 1
     RemesPathLogger.info(f"parse_expr_or_scalar returns {(last_tok, ii)}")
     return last_tok, ii
 
@@ -537,6 +564,7 @@ def parse_expr_or_scalar_func(query, jsnode, ii):
         if typ == 'delim' and tv in EXPR_FUNC_ENDERS:
             if not left_tok:
                 raise RemesParserException("No expression found where expr or scalar expected", ii, query)
+            curtok = left_tok
             break
         if typ == 'binop':
             if left_tok is None or left_tok['type'] == 'binop':
@@ -601,16 +629,17 @@ syntax.
 This is relevant to both the expr_function and scalar_function parts of the
 grammar, because it is agnostic about the types of arguments received
     '''
-    children = argfunc['children']
+    args = argfunc['children']
     func, out_types, min_args, max_args, arg_types, is_vectorized = argfunc['value']
-    if query[ii] != '(':
-        raise RemesParserException(f"Function '{func}' must have parens surrounding arguments", ii, query)
+    t = query[ii]
+    if not (t['type'] == 'delim' and t['value'] == '('):
+        raise RemesParserException(f"Function '{func.__name__}' must have parens surrounding arguments", ii, query)
     ii += 1
     arg_num = 0
     cur_arg = None
     while ii < len(query):
         t = query[ii]
-        c = t[0]
+        tv = t.get('value')
         type_options = arg_types[arg_num]
         # try to parse the current argument as one of the valid types
         RemesPathLogger.debug(f'In parse_arg_function, t = {t}, argfunc = {argfunc}, query = {query}, ii = {ii}, arg_num = {arg_num}')
@@ -623,25 +652,25 @@ grammar, because it is agnostic about the types of arguments received
                 cur_arg, ii = parse_slicer(query, jsnode, ii, cur_arg)
                 ii += 1
             if cur_arg is None or cur_arg['type'] not in type_options:
-                raise RemesParserException(f"For arg {arg_num} of function {func}, expected argument of a type in {type_options}, instead got type {cur_arg['type']}")
+                raise RemesParserException(f"For arg {arg_num} of function {func.__name__}, expected argument of a type in {type_options}, instead got type {cur_arg['type']}")
         except Exception as ex:
-            raise RemesParserException(f"For arg {arg_num} of function {func}, expected argument of a type in {type_options}, instead raised exception:\n{str(ex)}")
-        c = query[ii]
-        cv = c['value']
-        if arg_num + 1 < min_args and cv != ',':
-            raise RemesParserException(f"Expected ',' after argument {arg_num} of function {func} ({min_args}-{max_args} args)", ii, query)
-        if arg_num + 1 == max_args and cv != ')':
-            raise RemesParserException(f"Expected ')' after argument {arg_num} of function {func} ({min_args}-{max_args} args)", ii, query)
+            raise RemesParserException(f"For arg {arg_num} of function {func.__name__}, expected argument of a type in {type_options}, instead raised exception:\n{str(ex)}")
+        t = query[ii]
+        tv = t.get('value')
+        if arg_num + 1 < min_args and tv != ',':
+            raise RemesParserException(f"Expected ',' after argument {arg_num} of function {func.__name__} ({min_args}-{max_args} args)", ii, query)
+        if arg_num + 1 == max_args and tv != ')':
+            raise RemesParserException(f"Expected ')' after argument {arg_num} of function {func.__name__} ({min_args}-{max_args} args)", ii, query)
         elif max_args < inf:
             args[arg_num] = cur_arg
         else:
             args.append(cur_arg)
         arg_num += 1
         ii += 1
-        if cv == ')':
+        if tv == ')':
             RemesPathLogger.debug(f'at return of parse_arg_function, func = {func}, out_types = {out_types}, args = {args}')
             return apply_arg_function(func, out_types, is_vectorized, *args), ii
-    raise RemesParserException(f"Expected ')' after argument {arg_num} of function {func} ({min_args}-{max_args} args)", ii, query)
+    raise RemesParserException(f"Expected ')' after argument {arg_num} of function {func.__name__} ({min_args}-{max_args} args)", ii, query)
 
 
 def parse_projection(query, jsnode, ii):
@@ -653,7 +682,7 @@ def parse_projection(query, jsnode, ii):
     while ii < len(query):
         c = query[ii]
         if c == '`':
-            key, ii = parse_quoted_string(query, ii, '')
+            key, ii = parse_string(query, ii, '')
             try:
                 if query[ii] != ':':
                     raise RemesParserException("Expected ':' between key and value in object_projection", ii, query)
@@ -665,8 +694,11 @@ def parse_projection(query, jsnode, ii):
 
 def search(query, obj):
     toks = tokenize(query)
-    result = parse_expr_or_scalar_func(toks, expr(obj), 0)
-    return result[0]['value']
+    result = parse_expr_or_scalar_func(toks, [], 0)
+    resval = result[0]['value']
+    if hasattr(resval, '__call__'):
+        return resval(obj)
+    return resval
 
 
 #################
@@ -674,8 +706,11 @@ def search(query, obj):
 #################
 
 def test_parse_indexer(tester, x, out):
-    idx = parse_indexer(tokenize(x), [], 0)
-    tester.assertEqual(out, idx[0]['children'])
+    idx = parse_indexer(tokenize(x), [], 0)[0]
+    if idx['type'] == 'cur_json_func':
+        tester.assertEqual(out, idx['value'])
+    else:
+        tester.assertEqual(out, idx['children'])
 
 
 class RemesPathTester(unittest.TestCase):
@@ -683,13 +718,13 @@ class RemesPathTester(unittest.TestCase):
     ## misc tests
     ##############
     def test_current_node(self):
-        self.assertEqual(parse_expr_or_scalar(tokenize('@'), expr([1]), 0), (expr([1]),1))
+        self.assertEqual(parse_expr_or_scalar(tokenize('@'), [], 0)[0]['value']([1]), [1])
 
     ##############
     ## indexer tests
     ##############
     def test_parse_indexer_one_string(self):
-        test_parse_indexer(self, tokenize('.foo'), ['foo'])
+        test_parse_indexer(self, '.foo', ['foo'])
 
     def test_parse_indexer_dot_int_raises(self):
         with self.assertRaises(RemesParserException):
@@ -805,15 +840,15 @@ class RemesPathTester(unittest.TestCase):
 
     def test_parse_indexer_boolean_index_obj(self):
         query = tokenize("[@>=3]")
-        js = expr({'a':1,'b':2,'c':4})
-        correct_out = (boolean_index({'a':False,'b':False,'c':True}), 5)
-        self.assertEqual(parse_indexer(query, js, 0), correct_out)
+        js = {'a':1,'b':2,'c':4}
+        correct_out = {'a':False,'b':False,'c':True}
+        self.assertEqual(parse_indexer(query, [], 0)[0]['value'](js), correct_out)
 
     def test_parse_indexer_boolean_index_array(self):
         query = tokenize("[@>=3]")
-        js = expr([1,2,4])
-        correct_out = (boolean_index([False,False,True]), 5)
-        self.assertEqual(parse_indexer(query, js, 0), correct_out)
+        js = [1,2,4]
+        correct_out = [False,False,True]
+        self.assertEqual(parse_indexer(query, [], 0)[0]['value'](js), correct_out)
 
     ###################
     ## vectorized operations tests
@@ -989,24 +1024,22 @@ class RemesPathTester(unittest.TestCase):
         self.assertEqual(parse_arg_function(inp, [], 1, arg_function(FUNCTIONS['irange'])), correct_out)
 
     def test_s_join(self):
-        self.assertEqual(parse_arg_function(tokenize("(`_`, @)"), expr(['1','2']), 0, arg_function(FUNCTIONS['s_join'])), (quoted_string('1_2'), 5))
+        self.assertEqual(parse_arg_function(tokenize("(`_`, @)"), [], 0, arg_function(FUNCTIONS['s_join']))[0](['1', '2']), string('1_2'))
 
     def test_flatten(self):
-        self.assertEqual(parse_arg_function(tokenize("(@)"), expr([[1],[2]]), 0, arg_function(FUNCTIONS['flatten'])), (expr([1,2]), 3))
+        self.assertEqual(parse_arg_function(tokenize("(@)"), [], 0, arg_function(FUNCTIONS['flatten']))[0]([[1],[2]]), expr([1,2]))
 
     def test_parse_expr_or_scalar_func_s_slice(self):
         inp = tokenize('(`abc`, 0)')
-        self.assertEqual(parse_arg_function(inp, [], 0, arg_function(FUNCTIONS['s_slice'])), (quoted_string('a'), 6))
+        self.assertEqual(parse_arg_function(inp, [], 0, arg_function(FUNCTIONS['s_slice'])), (string('a'), 5))
     ##############
     ## parse_expr_or_scalar_func tests
     ##############
     def test_parse_expr_or_scalar_func_paren_wrapped_int(self):
-        inp = tokenize('(((1)))')
-        correct_out = (int_node(1), 7)
-        self.assertEqual(parse_expr_or_scalar_func(inp, [], 0), correct_out)
+        self.assertEqual(parse_expr_or_scalar_func(tokenize('(((1)))'), [], 0), (int_node(1), 7))
 
     def test_parse_expr_or_scalar_func_s_slice(self):
-        self.assertEqual(parse_expr_or_scalar_func(tokenize('s_slice(`abc`, 0)'), [], 0), (quoted_string('a'), 6))
+        self.assertEqual(parse_expr_or_scalar_func(tokenize('s_slice(`abc`, 0)'), [], 0), (string('a'), 6))
 
     def test_parse_expr_or_scalar_func_paren_wrapped_arg_function(self):
         inp = tokenize('(s_len((`a`)))')
@@ -1027,7 +1060,7 @@ class RemesPathTester(unittest.TestCase):
     ## handling binops
     #############
     def test_parse_expr_or_scalar_func_simple_binops(self):
-        self.assertEqual(parse_expr_or_scalar_func(tokenize('@ + 3'), expr([1,2]), 0), (expr([4,5]), 3))
+        self.assertEqual(parse_expr_or_scalar_func(tokenize('@ + 3'), [], 0)[0]['value']([1,2]), [4,5])
 
     def test_parse_expr_or_scalar_func_binop_uminus_first_arg(self):
         self.assertEqual(parse_expr_or_scalar_func(tokenize('-2*3'), [], 0), (int_node(-6), 4))
@@ -1053,17 +1086,17 @@ class RemesPathTester(unittest.TestCase):
     ###############
     def test_apply_indexer_list_one_varname_list(self):
         obj = {'a': 1, 'b': 2, 'c': 3}
-        idxrs = [tokenize("[a,b]")]
+        idxrs = [parse_indexer(tokenize("[a,b]"), [], 0)[0]]
         self.assertEqual(apply_indexer_list(obj, idxrs), {'a': 1, 'b': 2})
 
     def test_apply_indexer_list_one_slicer_list(self):
         obj = [1,2,3,4]
-        idxrs = [tokenize("[0,3]")]
+        idxrs = [parse_indexer(tokenize("[0,3]"), [], 0)[0]]
         self.assertEqual(apply_indexer_list(obj, idxrs), [1,4])
 
     def test_apply_indexer_list_slicer_then_varname(self):
         obj = [{'a':1, 'b': 2, 'c': 3}, {'a': 4, 'b': 5, 'c': 6}]
-        idxrs = [tokenize("[1]"), tokenize(".a")]
+        idxrs = [parse_indexer(tokenize(x), [], 0)[0] for x in ["[1]", ".a"]]
         self.assertEqual(apply_indexer_list(obj, idxrs), 4)
 
     def test_apply_indexer_list_three_slicer_lists(self):
@@ -1078,7 +1111,7 @@ class RemesPathTester(unittest.TestCase):
 
                [[18, 19, 20],
                 [21, 22, 23]]]
-        idxrs = [tokenize(ix) for ix in ["[0,1,3]", "[1:]", "[0, 1]"]]
+        idxrs = [parse_indexer(tokenize(ix), [], 0)[0] for ix in ["[0,1,3]", "[1:]", "[0, 1]"]]
         correct_out = [
             [[3,   4]],
             [[9,  10]],
@@ -1088,7 +1121,7 @@ class RemesPathTester(unittest.TestCase):
 
     def test_apply_indexer_list_two_varname_lists(self):
         obj = {'a': {'b': 1, 'c': 2, 'd': 3}, 'b': {'b': 1, 'c': 2, 'd': 3}, 'e': 'foobar'}
-        idxrs = [tokenize("[a,b]"), ['.', 'd']]
+        idxrs = [parse_indexer(tokenize(ix), [], 0)[0] for ix in ["[a,b]", ".d"]]
         correct_out = {'a': 3, 'b': 3}
         self.assertEqual(apply_indexer_list(obj, idxrs), correct_out)
 
@@ -1098,7 +1131,7 @@ class RemesPathTester(unittest.TestCase):
  {'name': 'bar',
   'players': [{'name': 'carol', 'hits': [7, 3, 0, 5]},
    {'name': 'dave', 'hits': [1, 0, 4, 10]}]}]
-        idxrs = [tokenize(ix) for ix in ["[:]", ".players", "[1]"]]
+        idxrs = [parse_indexer(tokenize(ix), [], 0)[0] for ix in ["[:]", ".players", "[1]"]]
         correct_out = [{'name': 'dave', 'hits': [1, 0, 4, 10]}]
         self.assertEqual(apply_indexer_list(obj, idxrs), correct_out)
 
@@ -1106,20 +1139,20 @@ class RemesPathTester(unittest.TestCase):
     ## indexing in parse_expr_or_scalar_func
     ###############
     def test_parse_expr_or_scalar_index_obj(self):
-        self.assertEqual(parse_expr_or_scalar_func(tokenize('@.foo'), expr({'foo': 'bar'}), 0), (quoted_string('bar'), 3))
+        self.assertEqual(parse_expr_or_scalar_func(tokenize('@.foo'), [], 0)[0]['value']({'foo': 'bar'}), 'bar')
 
     def test_parse_expr_or_scalar_index_arr(self):
-        self.assertEqual(parse_expr_or_scalar_func(tokenize('@[0]'), expr([1,2]), 0), (int_node(1), 4))
+        self.assertEqual(parse_expr_or_scalar_func(tokenize('@[0]'), [], 0)[0]['value']([1,2]), 1)
 
     def test_parse_expr_or_scalar_index_arr_obj(self):
         obj = expr([{'foo': 1, 'bar': 2},{'foo': 'a', 'bar': 'b'}])
-        correct_out = (int_node(1), 6)
-        self.assertEqual(parse_expr_or_scalar_func(tokenize('@[0].foo'), obj, 0), correct_out)
+        correct_out = 1
+        self.assertEqual(parse_expr_or_scalar_func(tokenize('@[0].foo'), [], 0)[0]['value'](obj), correct_out)
 
     def test_parse_expr_or_scalar_index_obj_arr(self):
         obj = expr({'foo': [1,'a'], 'bar': [2, 'b']})
-        correct_out = (expr({'foo': ['a'], 'bar': ['b']}), 10)
-        self.assertEqual(parse_expr_or_scalar_func(tokenize('@[foo,bar][1:]'), obj, 0), correct_out)
+        correct_out = {'foo': ['a'], 'bar': ['b']}
+        self.assertEqual(parse_expr_or_scalar_func(tokenize('@[foo,bar][1:]'), [], 0)[0]['value'](obj), correct_out)
 
 
     ################

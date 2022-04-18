@@ -5,7 +5,7 @@ expr ::= json (ws (indexer_list | projection))*
 projection ::= object_projection | array_projection
 object_projection ::= "{" ws key_value_pair ws ("," ws key_value_pair ws)* "}"
 array_projection ::= "{" ws expr_function ws ("," ws expr_function ws)* "}"
-key_value_pair ::= quoted_string ws ":" ws expr_function
+key_value_pair ::= string ws ":" ws expr_function
 json ::= cur_json_func | json_string
 cur_json_func ::= "@"
 indexer_list ::= indexer+
@@ -29,7 +29,8 @@ slicer_list ::= slicer ws ("," ws slicer ws)*
 varname_list ::= varname ws ("," ws varname ws)*
 slicer ::= int | int? ":" int? ":" int?
 scalar ::= quoted_string | num | regex | constant
-varname ::= unquoted_string | quoted_string | regex
+varname ::= string | regex
+string ::= quoted_string | unquoted_string
 regex ::= "g" quoted_string
 json_string ::= "j" quoted_string
 quoted_string ::= "`" ascii_char* "`" ; "`" inside the string must be escaped by "\\"; see the BACKTICK_STRING_REGEX below
@@ -49,19 +50,21 @@ binop ::= "&" | "|" | "^" | "=~" | "[=><!]=" | "<" | ">" | "+" | "-"
 import re
 inf = float('inf')
 
+def identity(x): return x
+
 
 def arg_function(argfunc):
     if argfunc.max_args == inf:
         args = []
     else:
         args = [None for ii in range(argfunc.max_args)]
-    return {'type': 'arg_function', 
-            'children': args, 
+    return {'type': 'arg_function',
+            'children': args,
             'value': argfunc}
 
 def array_projection(children):
     return {'type': 'array_projection', 'children': children}
-    
+
 
 def binop_function(func, precedence, first=None, second=None):
     return {'type': 'binop', 'children': [first, second], 'value': [func, precedence]}
@@ -69,13 +72,7 @@ def binop_function(func, precedence, first=None, second=None):
 
 def bool_node(value):
     return {'type': 'bool', 'value': value}
-    
 
-def boolean_index(value):
-    return {'type': 'boolean_index', 'children': value}
-
-
-def identity(x): return x
 
 def cur_json_func(func=None):
     '''a function of the user-supplied json. Undefined at compile time.
@@ -119,11 +116,11 @@ def regex(value):
     return {'type': 'regex', 'value': value}
 
 
-SCALAR_SUBTYPES = {'int', 'num', 'bool', 'quoted_string', 'unquoted_string', 'regex', 'null'}
-ALL_BASE_SUBTYPES = {'expr'} | SCALAR_SUBTYPES
+SCALAR_SUBTYPES = {'int', 'num', 'bool', 'string', 'regex', 'null'}
+ALL_BASE_SUBTYPES = EXPR_SUBTYPES | SCALAR_SUBTYPES
 def scalar(value):
     return {'type': 'scalar', 'value': value}
-    
+
 
 SLICER_SUBTYPES = {'int', 'slicer'}
 def slicer(ints):
@@ -138,20 +135,21 @@ def string(value):
     return {'type': 'string', 'value': value}
 
 
-VARNAME_SUBTYPES = {'unquoted_string', 'quoted_string', 'regex'}
+VARNAME_SUBTYPES = {'string', 'regex'}
 # def varname(node):
     # return {"type": "varname", "value": node['value']}
 
 def varname_list(nodes):
-    # assert all(node['type'] == 'varname' for node in nodes) 
+    # assert all(node['type'] == 'varname' for node in nodes)
     return {'type': 'varname_list', 'children': nodes}
-    
-    
+
+
 AST_TOK_BUILDER_MAP = {
     # the ast function that makes each type of token
     'array_projection': array_projection,
     'binop': binop_function,
     'bool': bool_node,
+    'cur_json_func': cur_json_func,
     'expr': expr,
     # 'expr_arg_function': arg_function,
     'int': int_node,
