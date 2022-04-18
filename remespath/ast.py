@@ -6,8 +6,8 @@ projection ::= object_projection | array_projection
 object_projection ::= "{" ws key_value_pair ws ("," ws key_value_pair ws)* "}"
 array_projection ::= "{" ws expr_function ws ("," ws expr_function ws)* "}"
 key_value_pair ::= quoted_string ws ":" ws expr_function
-json ::= current_json | json_string
-current_json ::= "@"
+json ::= cur_json_func | json_string
+cur_json_func ::= "@"
 indexer_list ::= indexer+
 indexer ::= "." varname
             | "[" ws boolean_index ws "]"
@@ -75,12 +75,12 @@ def boolean_index(value):
     return {'type': 'boolean_index', 'children': value}
 
 
-def current_json():
-    return {'type': 'current', 'value': lambda x: x}
-    
-    
-def current_json_function(func):
-    '''a function of the current node. Undefined at compile time'''
+def identity(x): return x
+
+def cur_json_func(func=None):
+    '''a function of the user-supplied json. Undefined at compile time.
+If no function supplied, defaults to the identity function.'''
+    func = func or identity
     return {'type': 'cur_json_func', 'value': func}
 
 
@@ -98,7 +98,7 @@ def int_node(value):
     return {'type': 'int', 'value': value}
 
 
-EXPR_SUBTYPES = {'expr', 'current', 'cur_json_func'}
+EXPR_SUBTYPES = {'expr', 'cur_json_func'}
 def expr(json_):
     return {'type': 'expr', 'value': json_}
 

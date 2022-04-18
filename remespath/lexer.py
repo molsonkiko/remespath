@@ -32,7 +32,7 @@ def tokenize(query):
         t = mtch.groups()[0]
         c = t[0]
         if c == '@':
-            out.append(current_json())
+            out.append(cur_json_func())
         elif c in DELIMITERS:
             out.append(delim(c))
         elif c == '`':
@@ -97,9 +97,9 @@ class RemesPathLexerTester(unittest.TestCase):
     def test_tokenize(self):
         for query_example, correct_out in [
             ('@.foo[b,z][1:3]', [
-            current_json(), delim('.'), string('foo'), delim('['), string('b'), delim(','), string('z'), delim(']'), delim('['), int_node(1), delim(':'), int_node(3), delim(']')]),
+            cur_json_func(), delim('.'), string('foo'), delim('['), string('b'), delim(','), string('z'), delim(']'), delim('['), int_node(1), delim(':'), int_node(3), delim(']')]),
             ('foo == g`x+12` | sum(2.0**`a`)', [string('foo'), binop_function(*BINOPS['==']), regex(re.compile('x+12')), binop_function(*BINOPS['|']), arg_function(FUNCTIONS['sum']), delim('('), num(2.), binop_function(*BINOPS['**']), string('a'), delim(')')]),
-            ('@{`a`: 2e+2*(3.5e-1)}', [current_json(), delim('{'), string('a'), delim(':'), num(2e2), binop_function(*BINOPS['*']), delim('('), num(3.5e-1), delim(')'), delim('}')]),
+            ('@{`a`: 2e+2*(3.5e-1)}', [cur_json_func(), delim('{'), string('a'), delim(':'), num(2e2), binop_function(*BINOPS['*']), delim('('), num(3.5e-1), delim(')'), delim('}')]),
             ('{`y\\``: -j`[1]`}', [delim('{'), string('y`'), delim(':'), binop_function(*BINOPS['-']), expr([1]), delim('}')]),
             ('< > <=', [binop_function(*BINOPS['<']), binop_function(*BINOPS['>']), binop_function(*BINOPS['<='])]),
             ('`abc` =~ g`\\`` & j`"a"`', [string('abc'), binop_function(*BINOPS['=~']), regex(re.compile('`')), binop_function(*BINOPS['&']), expr('a')]),
