@@ -52,6 +52,8 @@ inf = float('inf')
 
 def identity(x): return x
 
+function_type = type(identity)
+
 
 def arg_function(argfunc):
     if argfunc.max_args == inf:
@@ -169,6 +171,7 @@ AST_TYPE_BUILDER_MAP = {
     bool: bool_node,
     dict: expr,
     float: num,
+    function_type: cur_json_func,
     int: int_node,
     list: expr,
     re.Pattern: regex,

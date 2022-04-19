@@ -203,7 +203,7 @@ FUNCTIONS = {
     's_mul': ArgFunction(str_mul, ['expr', 'string'], 2, 2, [EXPR_SUBTYPES | {'string'}, {'int'}], True),
     's_slice': ArgFunction(str.__getitem__, ['expr', 'string'], 2, 2, [EXPR_SUBTYPES | {'string'}, {'slicer', 'int'}], True),
     's_split': ArgFunction(str_split, 'expr', 2, 3, [EXPR_SUBTYPES | {'string'}, {'regex', 'string'}, {'int'}], True),
-    's_sub': ArgFunction(str_sub, ['expr', 'string'], 3, 4, [EXPR_SUBTYPES | {'string'}, {'regex', 'string'}, {'string'}, {'int'}], False),
+    's_sub': ArgFunction(str_sub, ['expr', 'string'], 3, 4, [EXPR_SUBTYPES | {'string'}, {'regex', 'string'}, {'string'}, {'int'}], True),
     'str': ArgFunction(str, ['expr', 'string'], 1, 1, [ALL_BASE_SUBTYPES], True),
 }
 
