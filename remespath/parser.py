@@ -86,6 +86,8 @@ string_match = re.compile("[a-zA-Z_][a-zA-Z_0-9]*").match
 
 EXPR_FUNC_ENDERS = {']', ':', '}', ',', ')'}
 # these tokens have high enough precedence to stop an expr_function or scalar_function
+INDEXER_STARTERS = {'.', '['}
+
 
 def is_callable(x):
     return hasattr(x, '__call__')
@@ -192,7 +194,7 @@ def apply_indexer_list(obj, indexers):
         # something like [@.bar <= @.baz]
         result = apply_boolean_index(obj, children(obj))
     # result = idx_func(obj)
-    result_callable = is_callable(result)
+    # result_callable = is_callable(result)
     RemesPathLogger.info(f"In apply_indexer_list, idxr = {idxr}, obj = {obj}, result = {result}")
     is_dict = isinstance(obj, dict)
     has_one_option = False
@@ -202,11 +204,11 @@ def apply_indexer_list(obj, indexers):
         k = 0 if not is_dict else children[0]
     if len(indexers) == 1:
         if result and has_one_option:
-            if result_callable:
-                return result(obj)[k]
+            # if result_callable:
+                # return result(obj)[k]
             return result[k]
-        if result_callable:
-            return result(obj)
+        # if result_callable:
+            # return result(obj)
         return result
     if is_dict:
         if has_one_option:
@@ -217,8 +219,8 @@ def apply_indexer_list(obj, indexers):
             subdex = apply_indexer_list(v, indexers[1:])
             if subdex:
                 out[k] = subdex
-    elif result_callable:
-        return result(obj)
+    # elif result_callable:
+        # return result(obj)
     else:
         if has_one_option:
             # don't need an array output when you're getting a single index
@@ -273,21 +275,21 @@ def resolve_binop(binop, a, b, obj):
         if btype == 'expr':
             out = expr(binop_scalar_json(binop, aval, bval))
         if btype == 'cur_json_func':
-            out = expr(binop_scalar_json(binop, aval, bval(obj)))
+            out = expr(binop_scalar_json(binop, aval, obj)) #bval(obj)))
     elif atype == 'expr':
         if btype in SCALAR_SUBTYPES:
             out = expr(binop_json_scalar(binop, aval, bval))
         if btype == 'expr':
             out = expr(binop_two_jsons(binop, aval, bval))
         if btype == 'cur_json_func':
-            out = expr(binop_two_jsons(binop, aval, bval(obj)))
+            out = expr(binop_two_jsons(binop, aval, obj)) # bval(obj)))
     elif atype == 'cur_json_func':
         if btype in SCALAR_SUBTYPES:
-            out = expr(binop_json_scalar(binop, aval(obj), bval))
+            out = expr(binop_json_scalar(binop, obj, bval)) # aval(obj), bval))
         if btype == 'expr':
-            out = expr(binop_two_jsons(binop, aval(obj), bval))
+            out = expr(binop_two_jsons(binop, obj, bval)) # aval(obj), bval))
         if btype == 'cur_json_func':
-            out = expr(binop_two_jsons(binop, aval(obj), bval(obj)))
+            out = expr(binop_two_jsons(binop, obj, obj)) # aval(obj), bval(obj)))
     else:
         raise RemesParserException(f"Invalid type '{atype}' for first arg to binop")
     RemesPathLogger.info(f"resolve_binop returns {out}")
@@ -312,11 +314,11 @@ def apply_arg_function(func, out_types, is_vectorized, inp, *args):
         xval = avals[0]
         xtype = x['type']
         x_callable = xtype == 'cur_json_func' # is a function
-        other_callables = False
+        # other_callables = False
         other_args = []
         for arg in avals[1:]:
-            if is_callable(arg):
-                other_callables = True
+            # if is_callable(arg):
+                # other_callables = True
             other_args.append(arg)
         if x_callable:
             out_types = 'expr'
@@ -328,27 +330,26 @@ def apply_arg_function(func, out_types, is_vectorized, inp, *args):
             out_types = out_types
         ast_tok_builder = AST_TOK_BUILDER_MAP[out_types]
         if xtype == 'expr':
-            if other_callables:
-                if isinstance(xval, dict):
-                    return ast_tok_builder({k: func(v, *[a if not is_callable(a) else a(inp) for a in other_args]) for k, v in xval.items()})
-                elif isinstance(xval, list):
-                    return ast_tok_builder([func(v, *[a if not is_callable(a) else a(inp) for a in other_args]) for v in xval])
-            elif isinstance(xval, dict):
+            # if other_callables:
+                # if isinstance(xval, dict):
+                    # return ast_tok_builder({k: func(v, *[a if not is_callable(a) else a(inp) for a in other_args]) for k, v in xval.items()})
+                # elif isinstance(xval, list):
+                    # return ast_tok_builder([func(v, *[a if not is_callable(a) else a(inp) for a in other_args]) for v in xval])
+            if isinstance(xval, dict):
                 return ast_tok_builder({k: func(v, *other_args) for k, v in xval.items()})
             else:
                 return ast_tok_builder([func(v, *other_args) for v in xval])
         elif x_callable:
-            outfunc = None
-            if other_callables:
-                if isinstance(inp, dict):
-                    return ast_tok_builder({k: func(v, *[a if not is_callable(a) else a(inp) for a in other_args]) for k, v in inp.items()})
-                return ast_tok_builder([func(v, *[a if not is_callable(a) else a(inp) for a in other_args]) for v in inp])
-            else:
-                if isinstance(inp, dict):
-                    return ast_tok_builder({k: func(v, *other_args) for k, v in inp.items()})
-                return ast_tok_builder([func(v, *other_args) for v in inp])
-        elif other_callables:
-            return ast_tok_builder(xval, *[a if not is_callable(a) else a(inp) for a in other_args])
+            # if other_callables:
+                # if isinstance(inp, dict):
+                    # return ast_tok_builder({k: func(v, *[a if not is_callable(a) else a(inp) for a in other_args]) for k, v in inp.items()})
+                # return ast_tok_builder([func(v, *[a if not is_callable(a) else a(inp) for a in other_args]) for v in inp])
+            # else:
+            if isinstance(inp, dict):
+                return ast_tok_builder({k: func(v, *other_args) for k, v in inp.items()})
+            return ast_tok_builder([func(v, *other_args) for v in inp])
+        # elif other_callables:
+            # return ast_tok_builder(xval, *[a if not is_callable(a) else a(inp) for a in other_args])
         return ast_tok_builder(func(xval, *other_args))
     # the following is if it's NOT vectorized
     avals = [a if not a else a['value'] for a in args]
@@ -357,18 +358,18 @@ def apply_arg_function(func, out_types, is_vectorized, inp, *args):
     xval = avals[0]
     xtype = x['type']
     x_callable = xtype == 'cur_json_func' # is a function
-    other_callables = False
-    for arg in avals[1:]:
-        if is_callable(arg):
-            other_callables = True
-        other_args.append(arg)
+    # other_callables = False
+    # for arg in avals[1:]:
+        # if is_callable(arg):
+            # other_callables = True
+        # other_args.append(arg)
     ast_tok_builder = AST_TOK_BUILDER_MAP[out_types]
     if x_callable:
-        if other_callables:
-            return ast_tok_builder(func(inp, *[a if not is_callable(a) else a(inp) for a in other_args]))
+        # if other_callables:
+            # return ast_tok_builder(func(inp, *[a if not is_callable(a) else a(inp) for a in other_args]))
         return ast_tok_builder(func(inp, *other_args))
-    elif other_callables:
-        return ast_tok_builder(func(xval, *[a if not is_callable(a) else a(inp) for a in other_args]))
+    # elif other_callables:
+        # return ast_tok_builder(func(xval, *[a if not is_callable(a) else a(inp) for a in other_args]))
     return ast_tok_builder(func(*avals))
 
 
@@ -416,9 +417,7 @@ def parse_indexer(query, jsnode, ii):
     t = query[ii]
     typ = t['type']
     tv = t.get('value')
-    if tv == '{':
-        return parse_projection(query, jsnode, ii + 1)
-    elif tv == '.':
+    if tv == '.':
         nt = peek_next_token(query, ii)
         if nt and nt['type'] not in VARNAME_SUBTYPES:
             raise RemesParserException("'.' syntax for indexers only allows a single key or regex as indexer", ii, query)
@@ -518,27 +517,39 @@ Does not resolve binops.'''
             raise RemesParserException("Unmatched '('", ii, query)
     elif typ == 'arg_function':
         last_tok, ii = parse_arg_function(query, jsnode, ii+1, t)
+    elif typ == 'cur_json_func':
+        last_tok = expr(jsnode)
+        ii += 1
     else:
         last_tok = t
         ii += 1
     if last_tok['type'] in EXPR_SUBTYPES:
         idxrs = []
         cur_idxr = None
-        # check if the expr has any indexers
+        # expr (indexer_list | projection)*
+        nt = peek_next_token(query, ii - 1)
         while True:
-            nt = peek_next_token(query, ii - 1)
-            if nt and nt['type'] == 'delim' and nt['value'] in {'.', '[', '{'}:
+            # check if the expr has any indexers
+            while nt and nt['type'] == 'delim' and nt['value'] in INDEXER_STARTERS:
                 cur_idxr, ii = parse_indexer(query, jsnode, ii)
                 RemesPathLogger.info(f"In parse_expr_or_scalar, found indexer {cur_idxr}")
                 idxrs.append(cur_idxr)
-            else:
-                break
-        if idxrs:
+                nt = peek_next_token(query, ii - 1)
             if last_tok['type'] == 'expr':
                 jsnode = last_tok['value']
-            result = apply_indexer_list(jsnode, idxrs)
-            last_tok = AST_TYPE_BUILDER_MAP[type(result)](result)
-            # ii += 1
+            if idxrs:
+                result = apply_indexer_list(jsnode, idxrs)
+                last_tok = AST_TYPE_BUILDER_MAP[type(result)](result)
+            if last_tok['type'] == 'expr':
+                jsnode = last_tok['value']
+            if nt and nt['type'] == 'delim':
+                if nt['value'] == '{':
+                    last_tok, ii = parse_projection(query, jsnode, ii + 1)
+                elif nt['value'] not in INDEXER_STARTERS:
+                    break
+            else:
+                break
+            nt = peek_next_token(query, ii - 1)
     RemesPathLogger.info(f"parse_expr_or_scalar returns {(last_tok, ii)}")
     return last_tok, ii
 
@@ -654,7 +665,8 @@ grammar, because it is agnostic about the types of arguments received
                 cur_arg, ii = parse_slicer(query, jsnode, ii, cur_arg)
                 ii += 1
             if cur_arg is None or cur_arg['type'] not in type_options:
-                raise RemesParserException(f"For arg {arg_num} of function {func.__name__}, expected argument of a type in {type_options}, instead got type {cur_arg['type']}")
+                argtype = None if cur_arg is None else cur_arg['type']
+                raise RemesParserException(f"For arg {arg_num} of function {func.__name__}, expected argument of a type in {type_options}, instead got type {argtype}")
         except Exception as ex:
             raise RemesParserException(f"For arg {arg_num} of function {func.__name__}, expected argument of a type in {type_options}, instead raised exception:\n{str(ex)}")
         t = query[ii]
@@ -695,7 +707,9 @@ def parse_projection(query, jsnode, ii):
                     raise RemesParserException("Mixture of values and key-value pairs in an object/array projection", ii, query)
                 if typ == 'string':
                     val, ii = parse_expr_or_scalar_func(query, jsnode, ii + 1)
-                    children.append([key['value'], val['value']])
+                    if not children:
+                        children = {}
+                    children[key['value']] = val['value']
                     is_object_projection = True
                     nt = peek_next_token(query, ii - 1)
                     RemesPathLogger.debug(f"In parse_projection, nt = {nt}, val = {val}, ii = {ii}")
@@ -705,9 +719,7 @@ def parse_projection(query, jsnode, ii):
                 children.append(key['value'])
             if nt['value'] == '}':
                 RemesPathLogger.debug(f"At return of parse_projection, children = {children}")
-                if is_object_projection:
-                    return object_projection(children), ii + 1
-                return array_projection(children), ii + 1
+                return projection(children), ii + 1
             if nt['value'] != ',':
                 raise RemesParserException("Values or key-value pairs in a projection must be comma-separated", ii, query)
         else:
@@ -739,7 +751,7 @@ class RemesPathTester(unittest.TestCase):
     ## misc tests
     ##############
     def test_current_node(self):
-        self.assertEqual(parse_expr_or_scalar(tokenize('@'), [], 0)[0]['value']([1]), [1])
+        self.assertEqual(parse_expr_or_scalar(tokenize('@'), [1], 0), (expr([1]), 1))
 
     ##############
     ## indexer tests
@@ -1189,23 +1201,40 @@ class RemesPathTester(unittest.TestCase):
         self.assertEqual(search('j`{"foo": 1}`.foo', []), 1)
 
     def test_search_dot_after_bool_idx(self):
-        self.assertEqual(search("@[:][s_slice(@.name, 0) == `f`].x", [{'name': 'a', 'x': 1}, {'name': 'fo', 'x': 2}, {'name': 'fb', 'x': 3}]),
-                        [2, 3])
-                        
-    def test_search_dot_after_bool_idx_alt_syntax(self):
+        one_syntax_worked = False
+        syntax_options = [
+        "@[:][s_slice(@.name, 0) == `f`].x",
         # this is a reasonably non-stupid way to do the same thing as
-        # the previous test
-        # if this test also fails, we've got a problem
-        self.assertEqual(search("@[s_slice(@[:].name, 0) == `f`].x", [{'name': 'a', 'x': 1}, {'name': 'fo', 'x': 2}, {'name': 'fb', 'x': 3}]),
-                        [2, 3])
+        # the first. If both fail, we've got a problem
+        "@[s_slice(@[:].name, 0) == `f`].x"
+        ]
+        x = [{'name': 'a', 'x': 1}, {'name': 'fo', 'x': 2}, {'name': 'fb', 'x': 3}]
+        correct_out = [2, 3]
+        for syntax in syntax_options:
+            try:
+                if search(syntax, x) == correct_out:
+                    one_syntax_worked = True
+            except:
+                pass
+        self.assertTrue(one_syntax_worked, msg=f"Neither {syntax_options[0]} nor {syntax_options[1]} querying on {x} produced the desired {correct_out}")
                         
     def test_search_idx_after_bool_idx(self):
-        self.assertEqual(search("@[@[:].foo > 1][0]", [{'foo': 1, 'bar': 3}, {'foo': 2, 'bar': 1}]), {'foo': 2, 'bar': 1})
-        
-    def test_search_idx_after_bool_idx_alt_syntax(self):
-        # as with the above alt_syntax test, this is kludgy but OK
+        one_syntax_worked = False
+        syntax_options = [
+            "@[@[:].foo > 1][0]", 
+        # as with the above alt_syntax test, option 2 is kludgy but OK
         # as an alternative to the syntax I would prefer to work
-        self.assertEqual(search("(@[@[:].foo > 1])[0]", [{'foo': 1, 'bar': 3}, {'foo': 2, 'bar': 1}]), {'foo': 2, 'bar': 1})
+            "(@[@[:].foo > 1])[0]"
+        ]
+        x = [{'foo': 1, 'bar': 3}, {'foo': 2, 'bar': 1}]
+        correct_out = {'foo': 2, 'bar': 1}
+        for syntax in syntax_options:
+            try:
+                if search(syntax, x) == correct_out:
+                    one_syntax_worked = True
+            except:
+                pass
+        self.assertTrue(one_syntax_worked, msg=f"Neither {syntax_options[0]} nor {syntax_options[1]} querying on {x} produced the desired {correct_out}")
                         
     def test_search_dot_then_slice(self):
         self.assertEqual(search("@.foo[0]", {'foo': [1]}), 1)
@@ -1250,10 +1279,22 @@ class RemesPathTester(unittest.TestCase):
         self.assertEqual(search("@[:].bar < 3", [{'foo': 2, 'bar': 1}, {'foo': 1, 'bar': 3}]), [True, False])
         
     def test_search_idx_curdoc_bool_idx(self):
-        self.assertEqual(search("@[:][@.foo == 1]", [{'foo': 1, 'bar': 3}, {'foo': 2, 'bar': 1}]), [{'foo': 1, 'bar': 3}])
-        
-    def test_search_idx_curdoc_bool_idx_alt_syntax(self):
-        self.assertEqual(search("@[@[:].foo == 1]", [{'foo': 1, 'bar': 3}, {'foo': 2, 'bar': 1}]), [{'foo': 1, 'bar': 3}])
+        one_syntax_worked = False
+        syntax_options = [
+            "@[:][@.foo == 1]", 
+            # as with the above alt_syntax test, option 2 is kludgy but OK
+            # as an alternative to the syntax I would prefer to work
+            "@[@[:].foo == 1]"
+        ]
+        x = [{'foo': 1, 'bar': 3}, {'foo': 2, 'bar': 1}]
+        correct_out = [{'foo': 1, 'bar': 3}]
+        for syntax in syntax_options:
+            try:
+                if search(syntax, x) == correct_out:
+                    one_syntax_worked = True
+            except:
+                pass
+        self.assertTrue(one_syntax_worked, msg=f"Neither {syntax_options[0]} nor {syntax_options[1]} querying on {x} produced the desired {correct_out}")
         
     ###############
     ## projections

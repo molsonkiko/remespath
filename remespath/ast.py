@@ -50,10 +50,6 @@ binop ::= "&" | "|" | "^" | "=~" | "[=><!]=" | "<" | ">" | "+" | "-"
 import re
 inf = float('inf')
 
-def identity(x): return x
-
-function_type = type(identity)
-
 
 def arg_function(argfunc):
     if argfunc.max_args == inf:
@@ -65,8 +61,7 @@ def arg_function(argfunc):
             'value': argfunc}
 
 
-def array_projection(children):
-    return {'type': 'array_projection', 'children': children}
+function_type = type(arg_function)
 
 
 def binop_function(func, precedence, first=None, second=None):
@@ -80,7 +75,7 @@ def bool_node(value):
 def cur_json_func(func=None):
     '''a function of the user-supplied json. Undefined at compile time.
 If no function supplied, defaults to the identity function.'''
-    func = func or identity
+    # func = func or identity
     return {'type': 'cur_json_func', 'value': func}
 
 
@@ -111,10 +106,8 @@ def num(value):
     return {'type': 'num', 'value': value}
 
 
-def object_projection(children):
-    if isinstance(children, dict):
-        return {'type': 'object_projection', 'children': children}
-    return {'type': 'object_projection', 'children': dict(children)}
+def projection(value):
+    return {'type': 'projection', 'value': value}
 
 
 def regex(value):
@@ -148,7 +141,6 @@ def varname_list(nodes):
 
 AST_TOK_BUILDER_MAP = {
     # the ast function that makes each type of token
-    'array_projection': array_projection,
     'binop': binop_function,
     'bool': bool_node,
     'cur_json_func': cur_json_func,
@@ -156,7 +148,7 @@ AST_TOK_BUILDER_MAP = {
     'int': int_node,
     'null': null_node,
     'num': num,
-    'object_projection': object_projection,
+    'projection': projection,
     'regex': regex,
     'scalar': scalar,
     'slicer': slicer,
