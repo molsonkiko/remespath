@@ -102,19 +102,6 @@ class RemesParserException(Exception):
     def __str__(self):
         if self.ind is None and self.x is None:
             return self.message
-        # if len(self.x) > 15:
-            # if self.ind < 11:
-                # xrepr = self.x[:15] + '...'
-                # space_before_caret = self.ind
-            # elif len(self.x) - self.ind <= 8:
-                # xrepr = '...' + self.x[self.ind-8:]
-                # space_before_caret = 11
-            # else:
-                # xrepr = '...' + self.x[self.ind-8:self.ind+8] + '...'
-                # space_before_caret = 11
-        # else:
-            # xrepr = self.x
-            # space_before_caret = self.ind
         return f'{self.message} (position {self.ind})\n{repr(self.x)}\n{self.x[self.ind]}' #{space_before_caret*" "}^'
 
 
@@ -157,13 +144,15 @@ inds: a list of indices or keys to select'''
 def apply_boolean_index(x, inds):
     if len(inds) != len(x):
         raise VectorizedArithmeticException(f"Boolean index length ({len(inds)}) != object/array length ({len(x)})")
-    if not all(isinstance(e, bool) for e in inds):
-        raise VectorizedArithmeticException('boolean index contains non-booleans')
     if isinstance(x, dict):
+        if not all(isinstance(e, bool) for e in inds.values()):
+            raise VectorizedArithmeticException('boolean index contains non-booleans')
         try:
             return {k: v for k, v in x.items() if inds[k]}
         except KeyError as ex:
             raise VectorizedArithmeticException(str(ex))
+    if not all(isinstance(e, bool) for e in inds):
+        raise VectorizedArithmeticException('boolean index contains non-booleans')
     return [v for v, ind in zip(x, inds) if ind]
 
 
@@ -186,13 +175,13 @@ def apply_indexer_list(obj, indexers):
         # a static boolean index (based on some JSON defined within the query)
         # something like j`[true,false,true]`
         result = apply_boolean_index(obj, children)
-    elif ixtype_end == 'tion':
-        # it's a projection
-        result = children
-    else:
-        # it's a boolean index based on the current object (a cur_json_func)
-        # something like [@.bar <= @.baz]
-        result = apply_boolean_index(obj, children(obj))
+    # elif ixtype_end == 'tion':
+        # # it's a projection
+        # result = children
+    # else:
+        # # it's a boolean index based on the current object (a cur_json)
+        # # something like [@.bar <= @.baz]
+        # result = apply_boolean_index(obj, children(obj))
     # result = idx_func(obj)
     # result_callable = is_callable(result)
     RemesPathLogger.info(f"In apply_indexer_list, idxr = {idxr}, obj = {obj}, result = {result}")
@@ -241,7 +230,7 @@ def apply_indexer_list(obj, indexers):
 def binop_two_jsons(func, a, b):
     la, lb = len(a), len(b)
     if la !=  lb :
-        raise VectorizedArithmeticException(f"Tried to add two objects of lengths {la} and {lb}")
+        raise VectorizedArithmeticException(f"Tried to apply a binop to two objects of lengths {la} and {lb}")
     if isinstance(a, dict):
         try:
             return {k: func(a[k], b[k]) for k in a}
@@ -274,22 +263,22 @@ def resolve_binop(binop, a, b, obj):
             out = AST_TYPE_BUILDER_MAP[type(outval)](outval)
         if btype == 'expr':
             out = expr(binop_scalar_json(binop, aval, bval))
-        if btype == 'cur_json_func':
-            out = expr(binop_scalar_json(binop, aval, obj)) #bval(obj)))
+        # if btype == 'cur_json':
+            # out = expr(binop_scalar_json(binop, aval, obj)) #bval(obj)))
     elif atype == 'expr':
         if btype in SCALAR_SUBTYPES:
             out = expr(binop_json_scalar(binop, aval, bval))
         if btype == 'expr':
             out = expr(binop_two_jsons(binop, aval, bval))
-        if btype == 'cur_json_func':
-            out = expr(binop_two_jsons(binop, aval, obj)) # bval(obj)))
-    elif atype == 'cur_json_func':
-        if btype in SCALAR_SUBTYPES:
-            out = expr(binop_json_scalar(binop, obj, bval)) # aval(obj), bval))
-        if btype == 'expr':
-            out = expr(binop_two_jsons(binop, obj, bval)) # aval(obj), bval))
-        if btype == 'cur_json_func':
-            out = expr(binop_two_jsons(binop, obj, obj)) # aval(obj), bval(obj)))
+        # if btype == 'cur_json':
+            # out = expr(binop_two_jsons(binop, aval, obj)) # bval(obj)))
+    # elif atype == 'cur_json':
+        # if btype in SCALAR_SUBTYPES:
+            # out = expr(binop_json_scalar(binop, obj, bval)) # aval(obj), bval))
+        # if btype == 'expr':
+            # out = expr(binop_two_jsons(binop, obj, bval)) # aval(obj), bval))
+        # if btype == 'cur_json':
+            # out = expr(binop_two_jsons(binop, obj, obj)) # aval(obj), bval(obj)))
     else:
         raise RemesParserException(f"Invalid type '{atype}' for first arg to binop")
     RemesPathLogger.info(f"resolve_binop returns {out}")
@@ -313,14 +302,14 @@ def apply_arg_function(func, out_types, is_vectorized, inp, *args):
         x = args[0]
         xval = avals[0]
         xtype = x['type']
-        x_callable = xtype == 'cur_json_func' # is a function
+        x_cur_json = xtype == 'cur_json' # is a function
         # other_callables = False
         other_args = []
         for arg in avals[1:]:
             # if is_callable(arg):
                 # other_callables = True
             other_args.append(arg)
-        if x_callable:
+        if x_cur_json:
             out_types = 'expr'
         elif isinstance(out_types, list):
             out_types = out_types[0] if xtype == 'expr' else out_types[1]
@@ -339,7 +328,7 @@ def apply_arg_function(func, out_types, is_vectorized, inp, *args):
                 return ast_tok_builder({k: func(v, *other_args) for k, v in xval.items()})
             else:
                 return ast_tok_builder([func(v, *other_args) for v in xval])
-        elif x_callable:
+        elif x_cur_json:
             # if other_callables:
                 # if isinstance(inp, dict):
                     # return ast_tok_builder({k: func(v, *[a if not is_callable(a) else a(inp) for a in other_args]) for k, v in inp.items()})
@@ -357,14 +346,14 @@ def apply_arg_function(func, out_types, is_vectorized, inp, *args):
     other_args = []
     xval = avals[0]
     xtype = x['type']
-    x_callable = xtype == 'cur_json_func' # is a function
+    x_cur_json = xtype == 'cur_json' # is a function
     # other_callables = False
     # for arg in avals[1:]:
         # if is_callable(arg):
             # other_callables = True
         # other_args.append(arg)
     ast_tok_builder = AST_TOK_BUILDER_MAP[out_types]
-    if x_callable:
+    if x_cur_json:
         # if other_callables:
             # return ast_tok_builder(func(inp, *[a if not is_callable(a) else a(inp) for a in other_args]))
         return ast_tok_builder(func(inp, *other_args))
@@ -445,7 +434,7 @@ def parse_indexer(query, jsnode, ii):
                 else:
                     val = last_tok['value']
                     if is_callable(val):
-                        indexer = cur_json_func(last_tok['value'])
+                        indexer = cur_json(last_tok['value'])
                     else:
                         indexer = expr(last_tok['value'])
             if (indexer['type'] == 'slicer_list' and last_type not in SLICER_SUBTYPES) \
@@ -517,7 +506,7 @@ Does not resolve binops.'''
             raise RemesParserException("Unmatched '('", ii, query)
     elif typ == 'arg_function':
         last_tok, ii = parse_arg_function(query, jsnode, ii+1, t)
-    elif typ == 'cur_json_func':
+    elif typ == 'cur_json':
         last_tok = expr(jsnode)
         ii += 1
     else:
@@ -719,7 +708,7 @@ def parse_projection(query, jsnode, ii):
                 children.append(key['value'])
             if nt['value'] == '}':
                 RemesPathLogger.debug(f"At return of parse_projection, children = {children}")
-                return projection(children), ii + 1
+                return expr(children), ii + 1
             if nt['value'] != ',':
                 raise RemesParserException("Values or key-value pairs in a projection must be comma-separated", ii, query)
         else:
@@ -1061,10 +1050,10 @@ class RemesPathTester(unittest.TestCase):
 
     def test_flatten(self):
         self.assertEqual(parse_arg_function(tokenize("(@)"), [[1],[2]], 0, arg_function(FUNCTIONS['flatten'])), (expr([1,2]), 3))
-
-    def test_parse_expr_or_scalar_func_s_slice(self):
-        inp = tokenize('(`abc`, 0)')
-        self.assertEqual(parse_arg_function(inp, [], 0, arg_function(FUNCTIONS['s_slice'])), (string('a'), 5))
+        
+    def test_flatten_2(self):
+        self.assertEqual(parse_arg_function(tokenize("(@, 2)"), [[[1]], [[2]], 3], 0, arg_function(FUNCTIONS['flatten'])), (expr([1,2,3]), 5))
+        
     ##############
     ## parse_expr_or_scalar_func tests
     ##############
@@ -1189,11 +1178,75 @@ class RemesPathTester(unittest.TestCase):
 
 
     ################
-    ## search tests
+    ## search tests with functions
     ################
+    def test_search_sort_by_key(self):
+        self.assertEqual(search("sort_by(@, foo)", [{'foo': 2, 'bar': 1}, {'foo': 1, 'bar': 3}]), [{'foo': 1, 'bar': 3}, {'foo': 2, 'bar': 1}])
+        
+    def test_search_sort_by_key_reverse(self):
+        self.assertEqual(search("sort_by(@, a, true)", [{'a': 1, 'b': 2}, {'a': 2, 'b': 1}]), [{'a': 2, 'b': 1}, {'a': 1, 'b': 2}])
+        
+    def test_search_max_by_key(self):
+        self.assertEqual(search("max_by(@, foo)", [{'foo': 2, 'bar': 1}, {'foo': 1, 'bar': 3}]), {'foo': 2, 'bar': 1})
+        
+    def test_search_min_by_key(self):
+        self.assertEqual(search("min_by(@, foo)", [{'foo': 2, 'bar': 1}, {'foo': 1, 'bar': 3}]), {'foo': 1, 'bar': 3})
+        
+    def test_search_is_str_num_expr(self):
+        inputs = ["`a`", "1", "j`[[2]]`", "-1.0", "true"]
+        for func, correct_results in [
+            ['is_str', [True, False, [False], False, False]],
+            ['is_num', [False, True, [False], True, True]], 
+            ['is_expr', [False, False, [True], False, False]],
+        ]:
+            for input_, correct_result in zip(inputs, correct_results):
+                with self.subTest(input_=input_, func=func, correct_result=correct_result):
+                    self.assertEqual(search(f"{func}({input_})", []), correct_result)
+                    
+    def test_search_unique(self):
+        self.assertEqual(set(search("unique(@)", [1,1,2,3,1,3,3])), {1,2,3})
+        
+    def test_search_unique_sorted(self):
+        self.assertEqual(search("unique(@)", [1,1,2,3,1,3,3]), [1,2,3])
+        
+    def test_search_value_counts(self):
+        self.assertEqual(search("value_counts(@)", list('abca')), {'a': 2, 'b': 1, 'c': 1})
+        
+    def test_search_s_sub(self):
+        self.assertEqual(search("s_sub(@, `a`, `b`)", ["a bad dog"]), ["b bbd dog"])
+        
+    def test_search_s_sub_regex(self):
+        self.assertEqual(search("s_sub(@, g`(?i)a`, `b`)", ["A bad dog"]), ["b bbd dog"])
+        
+    def test_search_len_function(self):
+        self.assertEqual(search("len(@)", [1,2,3]), 3)
+
+    def test_search_len_function_j_json(self):
+        self.assertEqual(search("len(j`[1,2,3]`)", []), 3)
+        
     def test_search_s_slice(self):
         self.assertEqual(search('s_slice(`abc`, ::2)', []), 'ac')
 
+    
+    def test_search_isna(self):
+        self.assertEqual(search("isna(@)", [1, float('nan')]), [False, True])
+    
+    
+    ################
+    ## search tests with binops
+    ################
+    def test_search_curdoc_binop_curdoc(self):
+        self.assertEqual(search("@ ** @", [1,2]), [1,4])
+        
+    def test_search_uminus_curdoc(self):
+        self.assertEqual(search("-@", [1]), [-1])
+        
+    def test_search_idx_binop(self):
+        self.assertEqual(search("@[:].bar < 3", [{'foo': 2, 'bar': 1}, {'foo': 1, 'bar': 3}]), [True, False])
+        
+    ###############
+    ## search tests with indexing
+    ###############
     def test_search_dot(self):
         self.assertEqual(search("@.foo", {'foo': 1}), 1)
         
@@ -1251,33 +1304,15 @@ class RemesPathTester(unittest.TestCase):
     def test_search_bool_idx_arr(self):
         self.assertEqual(search("@[@ >= 2]", [1,2,3]), [2, 3])
         
+    def test_search_bool_idx_dict(self):
+        self.assertEqual(search("@[@ > 2]", {'a': 1, 'b': 3}), {'b': 3})
+        
     def test_search_bool_idx_j_json(self):
         self.assertEqual(search("j`[1,2,3]`[j`[1,2,3]` >= 2]", []), [2, 3])
         
     def test_search_idx_on_expr_function(self):
         self.assertEqual(search("sorted(values(@))[0]", {'foo': 1, 'bar': 2}), 1)
-        
-    def test_search_sort_by_key(self):
-        self.assertEqual(search("sort_by(@, foo)", [{'foo': 2, 'bar': 1}, {'foo': 1, 'bar': 3}]), [{'foo': 1, 'bar': 3}, {'foo': 2, 'bar': 1}])
-        
-    def test_search_max_by_key(self):
-        self.assertEqual(search("max_by(@, foo)", [{'foo': 2, 'bar': 1}, {'foo': 1, 'bar': 3}]), {'foo': 2, 'bar': 1})
-        
-    def test_search_len_function(self):
-        self.assertEqual(search("len(@)", [1,2,3]), 3)
-
-    def test_search_len_function_j_json(self):
-        self.assertEqual(search("len(j`[1,2,3]`)", []), 3)
-        
-    def test_search_curdoc_binop_curdoc(self):
-        self.assertEqual(search("@ ** @", [1,2]), [1,4])
-        
-    def test_search_uminus_curdoc(self):
-        self.assertEqual(search("-@", [1]), [-1])
-        
-    def test_search_idx_binop(self):
-        self.assertEqual(search("@[:].bar < 3", [{'foo': 2, 'bar': 1}, {'foo': 1, 'bar': 3}]), [True, False])
-        
+    
     def test_search_idx_curdoc_bool_idx(self):
         one_syntax_worked = False
         syntax_options = [

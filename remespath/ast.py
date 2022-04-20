@@ -6,8 +6,8 @@ projection ::= object_projection | array_projection
 object_projection ::= "{" ws key_value_pair ws ("," ws key_value_pair ws)* "}"
 array_projection ::= "{" ws expr_function ws ("," ws expr_function ws)* "}"
 key_value_pair ::= string ws ":" ws expr_function
-json ::= cur_json_func | json_string
-cur_json_func ::= "@"
+json ::= cur_json | json_string
+cur_json ::= "@"
 indexer_list ::= indexer+
 indexer ::= "." varname
             | "[" ws boolean_index ws "]"
@@ -72,11 +72,11 @@ def bool_node(value):
     return {'type': 'bool', 'value': value}
 
 
-def cur_json_func(func=None):
+def cur_json(func=None):
     '''a function of the user-supplied json. Undefined at compile time.
 If no function supplied, defaults to the identity function.'''
     # func = func or identity
-    return {'type': 'cur_json_func', 'value': func}
+    return {'type': 'cur_json', 'value': func}
 
 
 def delim(value):
@@ -85,15 +85,15 @@ def delim(value):
 
 
 INDEXER_SUBTYPES = {'slicer_list', 'varname_list', 'boolean_index'}
-def indexer_list(*indexers):
-    return {'type': 'indexer_list', 'children': indexers}
+# def indexer_list(*indexers):
+    # return {'type': 'indexer_list', 'children': indexers}
 
 
 def int_node(value):
     return {'type': 'int', 'value': value}
 
 
-EXPR_SUBTYPES = {'expr', 'cur_json_func'}
+EXPR_SUBTYPES = {'expr', 'cur_json'}
 def expr(json_):
     return {'type': 'expr', 'value': json_}
 
@@ -106,8 +106,8 @@ def num(value):
     return {'type': 'num', 'value': value}
 
 
-def projection(value):
-    return {'type': 'projection', 'value': value}
+# def projection(value):
+    # return {'type': 'projection', 'value': value}
 
 
 def regex(value):
@@ -116,8 +116,8 @@ def regex(value):
 
 SCALAR_SUBTYPES = {'int', 'num', 'bool', 'string', 'regex', 'null'}
 ALL_BASE_SUBTYPES = EXPR_SUBTYPES | SCALAR_SUBTYPES
-def scalar(value):
-    return {'type': 'scalar', 'value': value}
+# def scalar(value):
+    # return {'type': 'scalar', 'value': value}
 
 
 SLICER_SUBTYPES = {'int', 'slicer'}
@@ -143,14 +143,14 @@ AST_TOK_BUILDER_MAP = {
     # the ast function that makes each type of token
     'binop': binop_function,
     'bool': bool_node,
-    'cur_json_func': cur_json_func,
+    'cur_json': cur_json,
     'expr': expr,
     'int': int_node,
     'null': null_node,
     'num': num,
-    'projection': projection,
+    # 'projection': projection,
     'regex': regex,
-    'scalar': scalar,
+    # 'scalar': scalar,
     'slicer': slicer,
     'slicer_list': slicer_list,
     'string': string,
@@ -161,7 +161,7 @@ AST_TYPE_BUILDER_MAP = {
     bool: bool_node,
     dict: expr,
     float: num,
-    function_type: cur_json_func,
+    # function_type: cur_json,
     int: int_node,
     list: expr,
     re.Pattern: regex,
