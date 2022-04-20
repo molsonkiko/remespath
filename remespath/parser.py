@@ -100,20 +100,20 @@ class RemesParserException(Exception):
     def __str__(self):
         if self.ind is None and self.x is None:
             return self.message
-        if len(self.x) > 15:
-            if self.ind < 11:
-                xrepr = self.x[:15] + '...'
-                space_before_caret = self.ind
-            elif len(self.x) - self.ind <= 8:
-                xrepr = '...' + self.x[self.ind-8:]
-                space_before_caret = 11
-            else:
-                xrepr = '...' + self.x[self.ind-8:self.ind+8] + '...'
-                space_before_caret = 11
-        else:
-            xrepr = self.x
-            space_before_caret = self.ind
-        return f'{self.message} (position {self.ind})\n{xrepr}\n{self.x[self.ind]}' #{space_before_caret*" "}^'
+        # if len(self.x) > 15:
+            # if self.ind < 11:
+                # xrepr = self.x[:15] + '...'
+                # space_before_caret = self.ind
+            # elif len(self.x) - self.ind <= 8:
+                # xrepr = '...' + self.x[self.ind-8:]
+                # space_before_caret = 11
+            # else:
+                # xrepr = '...' + self.x[self.ind-8:self.ind+8] + '...'
+                # space_before_caret = 11
+        # else:
+            # xrepr = self.x
+            # space_before_caret = self.ind
+        return f'{self.message} (position {self.ind})\n{repr(self.x)}\n{self.x[self.ind]}' #{space_before_caret*" "}^'
 
 
 class VectorizedArithmeticException(Exception):
@@ -174,19 +174,24 @@ def apply_indexer_list(obj, indexers):
     idxr = indexers[0]
     idx_func = None
     ixtype = idxr['type']
-    children = idxr.get('children')
-    if ixtype[-5:] == '_list':
+    ixtype_end = ixtype[-4:]
+    children = idxr.get('children') or idxr['value']
+    if ixtype_end == 'list':
         # varname_list (e.g. [bar,baz], .foo) or slicer_list (e.g. [0], [1,2:])
-        idx_func = lambda x: apply_multi_index(x, children, obj)
+        children = idxr['children']
+        result = (lambda x: apply_multi_index(x, children, obj))(obj)
     elif ixtype == 'expr':
         # a static boolean index (based on some JSON defined within the query)
         # something like j`[true,false,true]`
-        return apply_boolean_index(obj, idxr['value'])
+        result = apply_boolean_index(obj, children)
+    elif ixtype_end == 'tion':
+        # it's a projection
+        result = children
     else:
         # it's a boolean index based on the current object (a cur_json_func)
         # something like [@.bar <= @.baz]
-        return apply_boolean_index(obj, idxr['value'](obj))
-    result = idx_func(obj)
+        result = apply_boolean_index(obj, children(obj))
+    # result = idx_func(obj)
     result_callable = is_callable(result)
     RemesPathLogger.info(f"In apply_indexer_list, idxr = {idxr}, obj = {obj}, result = {result}")
     is_dict = isinstance(obj, dict)
@@ -392,7 +397,7 @@ def parse_slicer(query, jsnode, ii, first_num):
                 last_num = None
                 end += 1
                 continue
-            elif tval in  EXPR_FUNC_ENDERS:
+            elif tval in EXPR_FUNC_ENDERS:
                 break
         try:
             numtok, end = parse_expr_or_scalar_func(query, jsnode, end)
@@ -411,11 +416,13 @@ def parse_indexer(query, jsnode, ii):
     t = query[ii]
     typ = t['type']
     tv = t.get('value')
-    if tv == '.':
+    if tv == '{':
+        return parse_projection(query, jsnode, ii + 1)
+    elif tv == '.':
         nt = peek_next_token(query, ii)
         if nt and nt['type'] not in VARNAME_SUBTYPES:
             raise RemesParserException("'.' syntax for indexers only allows a single key or regex as indexer", ii, query)
-        return varname_list([nt['value']]), ii + 1
+        return varname_list([nt['value']]), ii + 2
     elif tv != '[':
         raise RemesParserException('Indexer must start with "." or "["', ii, query)
     children = []
@@ -437,7 +444,11 @@ def parse_indexer(query, jsnode, ii):
                 elif last_type in ['slicer', 'int']:
                     indexer = slicer_list(children)
                 else:
-                    indexer = cur_json_func(last_tok['value'])
+                    val = last_tok['value']
+                    if is_callable(val):
+                        indexer = cur_json_func(last_tok['value'])
+                    else:
+                        indexer = expr(last_tok['value'])
             if (indexer['type'] == 'slicer_list' and last_type not in SLICER_SUBTYPES) \
             or (indexer['type'] == 'varname_list' and last_type not in VARNAME_SUBTYPES):
                 raise RemesParserException("Cannot have indexers with a mix of ints/slicers and strings", ii, query)
@@ -516,16 +527,18 @@ Does not resolve binops.'''
         # check if the expr has any indexers
         while True:
             nt = peek_next_token(query, ii - 1)
-            if nt and nt['type'] == 'delim' and nt['value'] in {'.', '['}:
+            if nt and nt['type'] == 'delim' and nt['value'] in {'.', '[', '{'}:
                 cur_idxr, ii = parse_indexer(query, jsnode, ii)
                 RemesPathLogger.info(f"In parse_expr_or_scalar, found indexer {cur_idxr}")
                 idxrs.append(cur_idxr)
             else:
                 break
         if idxrs:
+            if last_tok['type'] == 'expr':
+                jsnode = last_tok['value']
             result = apply_indexer_list(jsnode, idxrs)
             last_tok = AST_TYPE_BUILDER_MAP[type(result)](result)
-            ii += 1
+            # ii += 1
     RemesPathLogger.info(f"parse_expr_or_scalar returns {(last_tok, ii)}")
     return last_tok, ii
 
@@ -537,6 +550,7 @@ def parse_expr_or_scalar_func(query, jsnode, ii):
     left_tok = None
     branch_children = None
     left_precedence = -inf
+    og_jsnode = jsnode
     root = None
     curtok = None
     children = None
@@ -662,22 +676,44 @@ grammar, because it is agnostic about the types of arguments received
 
 
 def parse_projection(query, jsnode, ii):
-    raise NotImplementedError
-    if query[ii] != '{':
-        raise RemesParserException("Projection must begin with '{'", ii, query)
     children = []
+    is_object_projection = False
+    nt = None
     key, val = None, None
+    tv, typ = None, None
+    entry = None
     while ii < len(query):
-        c = query[ii]
-        if c == '`':
-            key, ii = parse_string(query, ii, '')
-            try:
-                if query[ii] != ':':
-                    raise RemesParserException("Expected ':' between key and value in object_projection", ii, query)
-                # parse a token here?
-                # xpr, ii = parse_expr_or_scalar_func(query,
-            except Exception as ex:
-                raise RemesParserException(str(ex), ii, query)
+        key, ii = parse_expr_or_scalar_func(query, jsnode, ii)
+        typ = key['type']
+        tv = key.get('value')
+        nt = peek_next_token(query, ii - 1)
+        RemesPathLogger.debug(f"In parse_projection, nt = {nt}, key = {key}, ii = {ii}")
+        is_delim = nt and nt['type'] == 'delim'
+        if is_delim:
+            if nt['value'] == ':':
+                if children and not is_object_projection:
+                    raise RemesParserException("Mixture of values and key-value pairs in an object/array projection", ii, query)
+                if typ == 'string':
+                    val, ii = parse_expr_or_scalar_func(query, jsnode, ii + 1)
+                    children.append([key['value'], val['value']])
+                    is_object_projection = True
+                    nt = peek_next_token(query, ii - 1)
+                    RemesPathLogger.debug(f"In parse_projection, nt = {nt}, val = {val}, ii = {ii}")
+                else:
+                    raise RemesParserException(f"Object projection keys must be string, not {nt['type']}", ii, query)
+            else:
+                children.append(key['value'])
+            if nt['value'] == '}':
+                RemesPathLogger.debug(f"At return of parse_projection, children = {children}")
+                if is_object_projection:
+                    return object_projection(children), ii + 1
+                return array_projection(children), ii + 1
+            if nt['value'] != ',':
+                raise RemesParserException("Values or key-value pairs in a projection must be comma-separated", ii, query)
+        else:
+            raise RemesParserException("Values or key-value pairs in a projection must be comma-separated", ii, query)
+        ii += 1
+    raise RemesParserException("Unterminated projection", len(query)-1, query)
 
 
 def search(query, obj):
@@ -692,7 +728,7 @@ def search(query, obj):
 
 def test_parse_indexer(tester, x, out):
     idx = parse_indexer(tokenize(x), [], 0)[0]
-    if idx['type'] == 'cur_json_func':
+    if idx['type'] in EXPR_SUBTYPES:
         tester.assertEqual(out, idx['value'])
     else:
         tester.assertEqual(out, idx['children'])
@@ -826,13 +862,13 @@ class RemesPathTester(unittest.TestCase):
     def test_parse_indexer_boolean_index_obj(self):
         query = tokenize("[@>=3]")
         js = {'a':1,'b':2,'c':4}
-        correct_out = (cur_json_func({'a':False,'b':False,'c':True}), 5)
+        correct_out = (expr({'a':False,'b':False,'c':True}), 5)
         self.assertEqual(parse_indexer(query, js, 0), correct_out)
 
     def test_parse_indexer_boolean_index_array(self):
         query = tokenize("[@>=3]")
         js = [1,2,4]
-        correct_out = (cur_json_func([False,False,True]), 5)
+        correct_out = (expr([False,False,True]), 5)
         self.assertEqual(parse_indexer(query, js, 0), correct_out)
 
     ###################
@@ -1127,7 +1163,7 @@ class RemesPathTester(unittest.TestCase):
         self.assertEqual(parse_expr_or_scalar_func(tokenize('@.foo'), {'foo': 'bar'}, 0), (string('bar'), 3))
 
     def test_parse_expr_or_scalar_index_arr(self):
-        self.assertEqual(parse_expr_or_scalar_func(tokenize('@[0]'), [1,2], 0), (int_node(1), 5))
+        self.assertEqual(parse_expr_or_scalar_func(tokenize('@[0]'), [1,2], 0), (int_node(1), 4))
 
     def test_parse_expr_or_scalar_index_arr_obj(self):
         obj = [{'foo': 1, 'bar': 2},{'foo': 'a', 'bar': 'b'}]
@@ -1136,7 +1172,7 @@ class RemesPathTester(unittest.TestCase):
 
     def test_parse_expr_or_scalar_index_obj_arr(self):
         obj = {'foo': [1,'a'], 'bar': [2, 'b']}
-        correct_out = (expr({'foo': ['a'], 'bar': ['b']}), 11)
+        correct_out = (expr({'foo': ['a'], 'bar': ['b']}), 10)
         self.assertEqual(parse_expr_or_scalar_func(tokenize('@[foo,bar][1:]'), obj, 0), correct_out)
 
 
@@ -1146,28 +1182,33 @@ class RemesPathTester(unittest.TestCase):
     def test_search_s_slice(self):
         self.assertEqual(search('s_slice(`abc`, ::2)', []), 'ac')
 
+    def test_search_dot(self):
+        self.assertEqual(search("@.foo", {'foo': 1}), 1)
+        
+    def test_search_dot_j_json(self):
+        self.assertEqual(search('j`{"foo": 1}`.foo', []), 1)
+
     def test_search_dot_after_bool_idx(self):
-        x = [{'name': 'a', 'x': 1}, {'name': 'fo', 'x': 2}, {'name': 'fb', 'x': 3}]
-        self.assertEqual(search("@[:][s_slice(@.name, 0) == `f`].x", x),
+        self.assertEqual(search("@[:][s_slice(@.name, 0) == `f`].x", [{'name': 'a', 'x': 1}, {'name': 'fo', 'x': 2}, {'name': 'fb', 'x': 3}]),
                         [2, 3])
+                        
+    def test_search_dot_after_bool_idx_alt_syntax(self):
+        # this is a reasonably non-stupid way to do the same thing as
+        # the previous test
+        # if this test also fails, we've got a problem
+        self.assertEqual(search("@[s_slice(@[:].name, 0) == `f`].x", [{'name': 'a', 'x': 1}, {'name': 'fo', 'x': 2}, {'name': 'fb', 'x': 3}]),
+                        [2, 3])
+                        
+    def test_search_idx_after_bool_idx(self):
+        self.assertEqual(search("@[@[:].foo > 1][0]", [{'foo': 1, 'bar': 3}, {'foo': 2, 'bar': 1}]), {'foo': 2, 'bar': 1})
+        
+    def test_search_idx_after_bool_idx_alt_syntax(self):
+        # as with the above alt_syntax test, this is kludgy but OK
+        # as an alternative to the syntax I would prefer to work
+        self.assertEqual(search("(@[@[:].foo > 1])[0]", [{'foo': 1, 'bar': 3}, {'foo': 2, 'bar': 1}]), {'foo': 2, 'bar': 1})
                         
     def test_search_dot_then_slice(self):
         self.assertEqual(search("@.foo[0]", {'foo': [1]}), 1)
-        
-    def test_search_bool_idx_arr(self):
-        self.assertEqual(search("@[@ >= 2]", [1,2,3]), [2, 3])
-        
-    def test_search_idx_on_expr_function(self):
-        self.assertEqual(search("sorted(values(@))[0]", {'foo': 1, 'bar': 2}), 1)
-        
-    def test_search_sort_by_key(self):
-        self.assertEqual(search("sort_by(@, foo)", [{'foo': 2, 'bar': 1}, {'foo': 1, 'bar': 3}]), [{'foo': 1, 'bar': 3}, {'foo': 2, 'bar': 1}])
-        
-    def test_search_max_by_key(self):
-        self.assertEqual(search("max_by(@, foo)", [{'foo': 2, 'bar': 1}, {'foo': 1, 'bar': 3}]), {'foo': 2, 'bar': 1})
-        
-    def test_search_bool_idx_j_json(self):
-        self.assertEqual(search("j`[1,2,3]`[j`[1,2,3]` >= 2]", []), [2, 3])
         
     def test_search_dot_then_slice_j_json(self):
         self.assertEqual(search('j`{"foo": [1,2]}`.foo[:1]', []), [1])
@@ -1178,12 +1219,66 @@ class RemesPathTester(unittest.TestCase):
     def test_search_dot_dot_j_json(self):
         self.assertEqual(search('j`{"foo": {"bar": 1}}`.foo.bar', []), 1)
         
+    def test_search_bool_idx_arr(self):
+        self.assertEqual(search("@[@ >= 2]", [1,2,3]), [2, 3])
+        
+    def test_search_bool_idx_j_json(self):
+        self.assertEqual(search("j`[1,2,3]`[j`[1,2,3]` >= 2]", []), [2, 3])
+        
+    def test_search_idx_on_expr_function(self):
+        self.assertEqual(search("sorted(values(@))[0]", {'foo': 1, 'bar': 2}), 1)
+        
+    def test_search_sort_by_key(self):
+        self.assertEqual(search("sort_by(@, foo)", [{'foo': 2, 'bar': 1}, {'foo': 1, 'bar': 3}]), [{'foo': 1, 'bar': 3}, {'foo': 2, 'bar': 1}])
+        
+    def test_search_max_by_key(self):
+        self.assertEqual(search("max_by(@, foo)", [{'foo': 2, 'bar': 1}, {'foo': 1, 'bar': 3}]), {'foo': 2, 'bar': 1})
+        
     def test_search_len_function(self):
         self.assertEqual(search("len(@)", [1,2,3]), 3)
 
     def test_search_len_function_j_json(self):
         self.assertEqual(search("len(j`[1,2,3]`)", []), 3)
-
+        
+    def test_search_curdoc_binop_curdoc(self):
+        self.assertEqual(search("@ ** @", [1,2]), [1,4])
+        
+    def test_search_uminus_curdoc(self):
+        self.assertEqual(search("-@", [1]), [-1])
+        
+    def test_search_idx_binop(self):
+        self.assertEqual(search("@[:].bar < 3", [{'foo': 2, 'bar': 1}, {'foo': 1, 'bar': 3}]), [True, False])
+        
+    def test_search_idx_curdoc_bool_idx(self):
+        self.assertEqual(search("@[:][@.foo == 1]", [{'foo': 1, 'bar': 3}, {'foo': 2, 'bar': 1}]), [{'foo': 1, 'bar': 3}])
+        
+    def test_search_idx_curdoc_bool_idx_alt_syntax(self):
+        self.assertEqual(search("@[@[:].foo == 1]", [{'foo': 1, 'bar': 3}, {'foo': 2, 'bar': 1}]), [{'foo': 1, 'bar': 3}])
+        
+    ###############
+    ## projections
+    ###############
+    def test_projection_obj(self):
+        self.assertEqual(search("@{foo: @[0], bar: @[1]}", [1, 2]), {'foo': 1, 'bar': 2})
+        
+    def test_projection_arr(self):
+        self.assertEqual(search("@{sum(@.hits), @.foo}", {'foo': 'bar', 'hits': [1,2,3]}), [6, 'bar'])
+        
+    def test_projection_arr_after_bool_idx(self):
+        self.assertEqual(search("@[@[:].foo == 1]{@.foo, @.bar}", [{'foo': 1, 'bar': 3}, {'foo': 2, 'bar': 1}]), [[1, 3]])
+        
+    def test_projection_arr_after_idx(self):
+        self.assertEqual(search("@[:]{@.foo, @.bar}", [{'foo': 1, 'bar': 3}, {'foo': 2, 'bar': 1}]), [[1, 3], [2, 1]])
+        
+    def test_projection_arr_before_idx(self):
+        self.assertEqual(search("@[:]{@.foo, @.bar}[1]", [{'foo': 1, 'bar': 3}, {'foo': 2, 'bar': 1}]), [[2, 1]])
+        
+    def test_arg_func_projection_arr(self):
+        self.assertEqual(search("len(@{@.foo * @.bar})", {'foo': 1, 'bar': 2}), 1)
+        
+    def test_projection_obj_before_dot(self):
+        self.assertEqual(search("@{foo: @[0], bar: @[1]}.foo", [1, 2]), 1)
+        
 
 if __name__ == '__main__':
     unittest.main()

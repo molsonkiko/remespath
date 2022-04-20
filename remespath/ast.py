@@ -64,6 +64,7 @@ def arg_function(argfunc):
             'children': args,
             'value': argfunc}
 
+
 def array_projection(children):
     return {'type': 'array_projection', 'children': children}
 
@@ -111,7 +112,9 @@ def num(value):
 
 
 def object_projection(children):
-    return {'type': 'object_projection', 'children': children}
+    if isinstance(children, dict):
+        return {'type': 'object_projection', 'children': children}
+    return {'type': 'object_projection', 'children': dict(children)}
 
 
 def regex(value):
@@ -138,11 +141,8 @@ def string(value):
 
 
 VARNAME_SUBTYPES = {'string', 'regex'}
-# def varname(node):
-    # return {"type": "varname", "value": node['value']}
 
 def varname_list(nodes):
-    # assert all(node['type'] == 'varname' for node in nodes)
     return {'type': 'varname_list', 'children': nodes}
 
 
@@ -153,14 +153,12 @@ AST_TOK_BUILDER_MAP = {
     'bool': bool_node,
     'cur_json_func': cur_json_func,
     'expr': expr,
-    # 'expr_arg_function': arg_function,
     'int': int_node,
     'null': null_node,
     'num': num,
     'object_projection': object_projection,
     'regex': regex,
     'scalar': scalar,
-    # 'scalar_arg_function': arg_function,
     'slicer': slicer,
     'slicer_list': slicer_list,
     'string': string,
