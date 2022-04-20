@@ -62,7 +62,6 @@ syntax of R dataframe indexing.
 from remespath.ast import *
 from remespath.functions import *
 from remespath.lexer import *
-import json
 import operator
 import re
 import unittest
@@ -125,9 +124,10 @@ class VectorizedArithmeticException(Exception):
 ## INDEXER FUNCTIONS
 ##############
 
-def apply_multi_index(x, inds):
+def apply_multi_index(x, inds, obj=None):
     '''x: a list or dict
 inds: a list of indices or keys to select'''
+    RemesPathLogger.debug(f"In apply_multi_index, obj = {obj}, x = {x}, inds = {inds}")
     if isinstance(x, dict):
         out = {}
         for k in inds:
@@ -147,26 +147,9 @@ inds: a list of indices or keys to select'''
                 out.extend(x[k])
         return out
     # x is a function
-    def outfunc(obj):
-        fun = x(obj)
-        if isinstance(fun, dict):
-            out = {}
-            for k in inds:
-                if isinstance(k, re.Pattern):
-                    out.update(apply_regex_index(fun, k))
-                elif k in x:
-                    out[k] = fun[k]
-            return out
-        out = []
-        for k in inds:
-            if isinstance(k, int):
-                if k < len(fun):
-                    out.append(fun[k])
-            else:
-                # k is a slice
-                out.extend(fun[k])
-        return out
-    return outfunc
+    if obj:
+        return apply_multi_index(x(obj), inds)
+    raise RemesParserException("Expected x to be a list or dict, or obj to be defined")
 
 
 def apply_boolean_index(x, inds):
@@ -194,7 +177,7 @@ def apply_indexer_list(obj, indexers):
     children = idxr.get('children')
     if ixtype[-5:] == '_list':
         # varname_list (e.g. [bar,baz], .foo) or slicer_list (e.g. [0], [1,2:])
-        idx_func = lambda x: apply_multi_index(x, children)
+        idx_func = lambda x: apply_multi_index(x, children, obj)
     elif ixtype == 'expr':
         # a static boolean index (based on some JSON defined within the query)
         # something like j`[true,false,true]`
@@ -409,7 +392,7 @@ def parse_slicer(query, jsnode, ii, first_num):
                 last_num = None
                 end += 1
                 continue
-            elif tval in  {']', ','}:
+            elif tval in  EXPR_FUNC_ENDERS:
                 break
         try:
             numtok, end = parse_expr_or_scalar_func(query, jsnode, end)
@@ -420,7 +403,7 @@ def parse_slicer(query, jsnode, ii, first_num):
         if len(grps) == 2:
             break
     grps.append(last_num)
-    RemesPathLogger.debug(f'at parse_slicer return, query = {query}, end = {end}, grps = {grps}')
+    RemesPathLogger.debug(f'at parse_slicer return, query[end] = {query[end]}, end = {end}, grps = {grps}')
     return slicer(grps), end - 1
 
 
@@ -540,7 +523,7 @@ Does not resolve binops.'''
             else:
                 break
         if idxrs:
-            result = apply_indexer_list(last_tok['value'], idxrs)
+            result = apply_indexer_list(jsnode, idxrs)
             last_tok = AST_TYPE_BUILDER_MAP[type(result)](result)
             ii += 1
     RemesPathLogger.info(f"parse_expr_or_scalar returns {(last_tok, ii)}")
@@ -647,7 +630,7 @@ grammar, because it is agnostic about the types of arguments received
         tv = t.get('value')
         type_options = arg_types[arg_num]
         # try to parse the current argument as one of the valid types
-        RemesPathLogger.debug(f'In parse_arg_function, t = {t}, argfunc = {argfunc}, query = {query}, ii = {ii}, arg_num = {arg_num}')
+        RemesPathLogger.debug(f'In parse_arg_function, t = {t}, func = {func.__name__}, query[ii] = {query[ii]}, ii = {ii}, arg_num = {arg_num}')
         try:
             try:
                 cur_arg, ii = parse_expr_or_scalar_func(query, jsnode, ii)
@@ -673,7 +656,7 @@ grammar, because it is agnostic about the types of arguments received
         arg_num += 1
         ii += 1
         if tv == ')':
-            RemesPathLogger.debug(f'at return of parse_arg_function, func = {func}, out_types = {out_types}, args = {args}')
+            RemesPathLogger.debug(f'at return of parse_arg_function, func = {func.__name__}, out_types = {out_types}, args = {args}')
             return apply_arg_function(func, out_types, is_vectorized, jsnode, *args), ii
     raise RemesParserException(f"Expected ')' after argument {arg_num} of function {func.__name__} ({min_args}-{max_args} args)", ii, query)
 
@@ -1141,19 +1124,19 @@ class RemesPathTester(unittest.TestCase):
     ## indexing in parse_expr_or_scalar_func
     ###############
     def test_parse_expr_or_scalar_index_obj(self):
-        self.assertEqual(parse_expr_or_scalar_func(tokenize('@.foo'), expr({'foo': 'bar'}), 0), 'bar')
+        self.assertEqual(parse_expr_or_scalar_func(tokenize('@.foo'), {'foo': 'bar'}, 0), (string('bar'), 3))
 
     def test_parse_expr_or_scalar_index_arr(self):
-        self.assertEqual(parse_expr_or_scalar_func(tokenize('@[0]'), expr([1,2]), 0), (int_node(1), 4))
+        self.assertEqual(parse_expr_or_scalar_func(tokenize('@[0]'), [1,2], 0), (int_node(1), 5))
 
     def test_parse_expr_or_scalar_index_arr_obj(self):
-        obj = expr([{'foo': 1, 'bar': 2},{'foo': 'a', 'bar': 'b'}])
+        obj = [{'foo': 1, 'bar': 2},{'foo': 'a', 'bar': 'b'}]
         correct_out = (int_node(1), 6)
         self.assertEqual(parse_expr_or_scalar_func(tokenize('@[0].foo'), obj, 0), correct_out)
 
     def test_parse_expr_or_scalar_index_obj_arr(self):
         obj = {'foo': [1,'a'], 'bar': [2, 'b']}
-        correct_out = (expr({'foo': ['a'], 'bar': ['b']}), 10)
+        correct_out = (expr({'foo': ['a'], 'bar': ['b']}), 11)
         self.assertEqual(parse_expr_or_scalar_func(tokenize('@[foo,bar][1:]'), obj, 0), correct_out)
 
 
@@ -1163,10 +1146,43 @@ class RemesPathTester(unittest.TestCase):
     def test_search_s_slice(self):
         self.assertEqual(search('s_slice(`abc`, ::2)', []), 'ac')
 
-    def test_search_bool_idx(self):
+    def test_search_dot_after_bool_idx(self):
         x = [{'name': 'a', 'x': 1}, {'name': 'fo', 'x': 2}, {'name': 'fb', 'x': 3}]
         self.assertEqual(search("@[:][s_slice(@.name, 0) == `f`].x", x),
                         [2, 3])
+                        
+    def test_search_dot_then_slice(self):
+        self.assertEqual(search("@.foo[0]", {'foo': [1]}), 1)
+        
+    def test_search_bool_idx_arr(self):
+        self.assertEqual(search("@[@ >= 2]", [1,2,3]), [2, 3])
+        
+    def test_search_idx_on_expr_function(self):
+        self.assertEqual(search("sorted(values(@))[0]", {'foo': 1, 'bar': 2}), 1)
+        
+    def test_search_sort_by_key(self):
+        self.assertEqual(search("sort_by(@, foo)", [{'foo': 2, 'bar': 1}, {'foo': 1, 'bar': 3}]), [{'foo': 1, 'bar': 3}, {'foo': 2, 'bar': 1}])
+        
+    def test_search_max_by_key(self):
+        self.assertEqual(search("max_by(@, foo)", [{'foo': 2, 'bar': 1}, {'foo': 1, 'bar': 3}]), {'foo': 2, 'bar': 1})
+        
+    def test_search_bool_idx_j_json(self):
+        self.assertEqual(search("j`[1,2,3]`[j`[1,2,3]` >= 2]", []), [2, 3])
+        
+    def test_search_dot_then_slice_j_json(self):
+        self.assertEqual(search('j`{"foo": [1,2]}`.foo[:1]', []), [1])
+        
+    def test_search_dot_dot(self):
+        self.assertEqual(search("@.foo.bar", {'foo': {'bar': 1}}), 1)
+        
+    def test_search_dot_dot_j_json(self):
+        self.assertEqual(search('j`{"foo": {"bar": 1}}`.foo.bar', []), 1)
+        
+    def test_search_len_function(self):
+        self.assertEqual(search("len(@)", [1,2,3]), 3)
+
+    def test_search_len_function_j_json(self):
+        self.assertEqual(search("len(j`[1,2,3]`)", []), 3)
 
 
 if __name__ == '__main__':

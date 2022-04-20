@@ -111,6 +111,25 @@ def is_expr(x):
     return isinstance(x, (list, dict))
 
 
+def values(x):
+    return list(x.values())
+    
+def keys(x):
+    return list(x.keys())
+    
+def unique(x, sort=None):
+    if sort:
+        return sorted(set(x))
+    return list(set(x))
+
+def value_counts(x):
+    out = {}
+    for e in x:
+        out.setdefault(e, 0)
+        out[e] += 1
+    return out
+
+
 BINOPS = {
     # each value is a (function, precedence) pair.
     # thus (^, |, &) resolve after all other binops and pow resolves first
@@ -167,17 +186,19 @@ class ArgFunction(typing.NamedTuple):
 FUNCTIONS = {
     'flatten': ArgFunction(flatten, 'expr', 1, 2, [EXPR_SUBTYPES, {'int'}], False),
     'irange': ArgFunction(irange, 'expr', 1, 3, [{'int'}, {'int'}, {'int'}], False),
-    'keys': ArgFunction(dict.keys, 'expr', 1, 1, [EXPR_SUBTYPES], False),
+    'keys': ArgFunction(keys, 'expr', 1, 1, [EXPR_SUBTYPES], False),
     'len': ArgFunction(len, 'int', 1, inf, [EXPR_SUBTYPES], False),
     'max': ArgFunction(max, 'num', 1, inf, [EXPR_SUBTYPES], False),
     'max_by': ArgFunction(max_by, 'num', 2, 2, [EXPR_SUBTYPES, {'string', 'cur_json_func'}], False),
     'min': ArgFunction(min, 'num', 1, inf, [EXPR_SUBTYPES], False),
     'min_by': ArgFunction(min_by, 'num', 2, 2, [EXPR_SUBTYPES, {'string', 'cur_json_func'}], False),
     's_join': ArgFunction(str.join, 'string', 2, 2, [{'string'}, EXPR_SUBTYPES], False),
-    'sort_by': ArgFunction(sort_by, 'expr', 2, 3, [EXPR_SUBTYPES, {'bool'}, {'string', 'cur_json_func'}], False),
+    'sort_by': ArgFunction(sort_by, 'expr', 2, 3, [EXPR_SUBTYPES, {'string', 'cur_json_func'}, {'bool'}], False),
     'sorted': ArgFunction(sort_func, 'expr', 1, 2, [EXPR_SUBTYPES, {'bool'}], False),
     'sum': ArgFunction(sum, 'num', 1, 1, [EXPR_SUBTYPES], False),
-    'values': ArgFunction(dict.values, 'expr', 1, 1, [EXPR_SUBTYPES], False),
+    'unique': ArgFunction(unique, 'expr', 1, 2, [EXPR_SUBTYPES, {'bool'}], False),
+    'value_counts': ArgFunction(value_counts, 'expr', 1, 1, [EXPR_SUBTYPES], False),
+    'values': ArgFunction(values, 'expr', 1, 1, [EXPR_SUBTYPES], False),
     # the below functions are all vectorized
     # the '?' for out_type means that the output type is same as input
     # if there's a list of two output types, the first is the output type if
