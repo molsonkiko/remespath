@@ -1,7 +1,7 @@
 # AST nodes have this structure:
 # {"type": <node type>", children: [], "value": ""}
 LANGUAGE_SPEC = '''
-expr ::= json (ws (indexer_list | projection))*
+expr ::= json (ws indexer_list)? projection?
 projection ::= object_projection | array_projection
 object_projection ::= "{" ws key_value_pair ws ("," ws key_value_pair ws)* "}"
 array_projection ::= "{" ws expr_function ws ("," ws expr_function ws)* "}"
@@ -50,6 +50,8 @@ binop ::= "&" | "|" | "^" | "=~" | "[=><!]=" | "<" | ">" | "+" | "-"
 import re
 inf = float('inf')
 
+def identity(x): return x
+
 
 def arg_function(argfunc):
     if argfunc.max_args == inf:
@@ -75,7 +77,7 @@ def bool_node(value):
 def cur_json(func=None):
     '''a function of the user-supplied json. Undefined at compile time.
 If no function supplied, defaults to the identity function.'''
-    # func = func or identity
+    func = func or identity
     return {'type': 'cur_json', 'value': func}
 
 
@@ -85,15 +87,13 @@ def delim(value):
 
 
 INDEXER_SUBTYPES = {'slicer_list', 'varname_list', 'boolean_index'}
-# def indexer_list(*indexers):
-    # return {'type': 'indexer_list', 'children': indexers}
 
 
 def int_node(value):
     return {'type': 'int', 'value': value}
 
 
-EXPR_SUBTYPES = {'expr', 'cur_json'}
+EXPR_SUBTYPES = {'expr', 'cur_json', 'projection'}
 def expr(json_):
     return {'type': 'expr', 'value': json_}
 
@@ -106,8 +106,8 @@ def num(value):
     return {'type': 'num', 'value': value}
 
 
-# def projection(value):
-    # return {'type': 'projection', 'value': value}
+def projection(value):
+    return {'type': 'projection', 'value': value}
 
 
 def regex(value):
@@ -148,7 +148,7 @@ AST_TOK_BUILDER_MAP = {
     'int': int_node,
     'null': null_node,
     'num': num,
-    # 'projection': projection,
+    'projection': projection,
     'regex': regex,
     # 'scalar': scalar,
     'slicer': slicer,
@@ -161,7 +161,7 @@ AST_TYPE_BUILDER_MAP = {
     bool: bool_node,
     dict: expr,
     float: num,
-    # function_type: cur_json,
+    function_type: cur_json,
     int: int_node,
     list: expr,
     re.Pattern: regex,

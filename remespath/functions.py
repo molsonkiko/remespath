@@ -28,16 +28,10 @@ def log(x, base):
     return math.log(x, base)
 
 def max_by(x, key):
-    if isinstance(key, str):
-        k = key
-        key = lambda x: x[k]
-    return max(x, key=key)
+    return max(x, key=lambda x: x[key])
 
 def min_by(x, key):
-    if isinstance(key, str):
-        k = key
-        key = lambda x: x[k]
-    return min(x, key=key)
+    return min(x, key=lambda x: x[key])
 
 def sort_func(x, reverse):
     if reverse is None:
@@ -45,12 +39,9 @@ def sort_func(x, reverse):
     return sorted(x, reverse=reverse)
 
 def sort_by(x, key, reverse):
-    if isinstance(key, str):
-        k = key
-        key = lambda x: x[k]
     if reverse is None:
-        return sorted(x, key=key)
-    return sorted(x, key=key, reverse=reverse)
+        return sorted(x, key=lambda x: x[key])
+    return sorted(x, key=lambda x: x[key], reverse=reverse)
 
 def flatten(x, iterations=None):
     if iterations is None or iterations == 1:
@@ -189,11 +180,11 @@ FUNCTIONS = {
     'keys': ArgFunction(keys, 'expr', 1, 1, [EXPR_SUBTYPES], False),
     'len': ArgFunction(len, 'int', 1, inf, [EXPR_SUBTYPES], False),
     'max': ArgFunction(max, 'num', 1, inf, [EXPR_SUBTYPES], False),
-    'max_by': ArgFunction(max_by, 'num', 2, 2, [EXPR_SUBTYPES, {'string', 'cur_json'}], False),
+    'max_by': ArgFunction(max_by, 'num', 2, 2, [EXPR_SUBTYPES, {'string', 'int', 'num'}], False),
     'min': ArgFunction(min, 'num', 1, inf, [EXPR_SUBTYPES], False),
-    'min_by': ArgFunction(min_by, 'num', 2, 2, [EXPR_SUBTYPES, {'string', 'cur_json'}], False),
+    'min_by': ArgFunction(min_by, 'num', 2, 2, [EXPR_SUBTYPES, {'string', 'int', 'num'}], False),
     's_join': ArgFunction(str.join, 'string', 2, 2, [{'string'}, EXPR_SUBTYPES], False),
-    'sort_by': ArgFunction(sort_by, 'expr', 2, 3, [EXPR_SUBTYPES, {'string', 'cur_json'}, {'bool'}], False),
+    'sort_by': ArgFunction(sort_by, 'expr', 2, 3, [EXPR_SUBTYPES, {'string', 'int', 'num'}, {'bool'}], False),
     'sorted': ArgFunction(sort_func, 'expr', 1, 2, [EXPR_SUBTYPES, {'bool'}], False),
     'sum': ArgFunction(sum, 'num', 1, 1, [EXPR_SUBTYPES], False),
     'unique': ArgFunction(unique, 'expr', 1, 2, [EXPR_SUBTYPES, {'bool'}], False),
