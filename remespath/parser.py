@@ -67,7 +67,7 @@ import re
 import unittest
 import logging
 
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(message)s') #, filename="remespath.log", filemode='w')
+logging.basicConfig(level=logging.ERROR, format='%(asctime)s %(message)s') #, filename="remespath.log", filemode='w')
 RemesPathLogger = logging.getLogger(name='RemesPathLogger')
 
 
@@ -113,33 +113,31 @@ class VectorizedArithmeticException(Exception):
 ## INDEXER FUNCTIONS
 ##############
 
-def apply_multi_index(inds):
+def apply_multi_index(inds, is_varname_list):
     '''x: a list or dict
 inds: a list of indices or keys to select'''
-    def outfunc(x, inds):
-        RemesPathLogger.debug(f"In apply_multi_index, x = {x}, inds = {inds}")
-        if isinstance(x, dict):
+    if is_callable(inds):
+        return lambda x: apply_multi_index(inds(x), is_varname_list)(x)
+    if is_varname_list:
+        def outfunc(x, inds):
             out = {}
             for k in inds:
-                if isinstance(k, re.Pattern):
-                    out.update(apply_regex_index(x, k))
-                elif k in x:
+                if k in x:
                     out[k] = x[k]
+                elif isinstance(k, re.Pattern):
+                    out.update(apply_regex_index(x, k))
             return out
-        elif isinstance(x, list):
+    else:
+        def outfunc(x, inds):
             out = []
+            lenx = len(x)
             for k in inds:
                 if isinstance(k, int):
-                    if k < len(x):
+                    if k < lenx:
                         out.append(x[k])
-                elif isinstance(k, slice):
-                    # k is a slice
+                else:
                     out.extend(x[k])
             return out
-        # x is a function
-        elif is_callable(inds):
-            return apply_multi_index(x, inds(x))
-        raise RemesParserException("Expected x to be a list or dict, and for inds to be a list, dict or function")
     return lambda x: outfunc(x, inds)
 
 
@@ -150,6 +148,7 @@ def apply_boolean_index(inds):
             inds = indfunc(x)
         if len(inds) != len(x):
             raise VectorizedArithmeticException(f"Boolean index length ({len(inds)}) != object/array length ({len(x)})")
+        out = None
         try:
             if isinstance(x, dict):
                 out = {}
@@ -186,7 +185,6 @@ def apply_indexer_list(indexers):
                 return result
             return outfunc(result, indexers[1:])
         RemesPathLogger.info(f"In apply_indexer_list.outfunc, idxr = {idxr}, obj = {obj}, result = {result}")
-        is_dict = isinstance(result, dict)
         if len(indexers) == 1:
             if result and has_one_option:
                 if not is_callable(result):
@@ -195,9 +193,11 @@ def apply_indexer_list(indexers):
             if not is_callable(result):
                 return result
             return result(obj)
-        if is_dict:
+        if isinstance(result, dict):
             if has_one_option:
                 # don't need to specify the key when only one key is possible
+                if k not in result:
+                    return
                 return outfunc(result[k], indexers[1:])
             out = {}
             for k, v in result.items():
@@ -206,6 +206,8 @@ def apply_indexer_list(indexers):
                     out[k] = subdex
             return out
         # obj is a list
+        if not result:
+            return result
         if has_one_option:
             # don't need an array output when you're getting a single index
             return outfunc(result[0], indexers[1:])
@@ -296,28 +298,28 @@ def resolve_binop_tree(binop, a, b):
 
 
 def apply_arg_function(func, out_types, is_vectorized, *args): # inp, *args):
+    avals = [a if not a else a['value'] for a in args]
+    x = args[0]
+    xval = avals[0]
+    xtype = x['type']
+    x_callable = is_callable(xval) # is a function
+    other_callables = False
+    other_args = []
+    for arg in avals[1:]:
+        if is_callable(arg):
+            other_callables = True
+        other_args.append(arg)
+    if x_callable:
+        out_types = 'cur_json'
+    elif isinstance(out_types, list):
+        out_types = out_types[0] if xtype == 'expr' else out_types[1]
+    elif out_types == '?':
+        out_types = xtype
+    else:
+        out_types = out_types
+    ast_tok_builder = AST_TOK_BUILDER_MAP[out_types]
     RemesPathLogger.debug(f"In apply_arg_function, func = {func}, out_types={out_types}, is_vectorized={is_vectorized}, args={args}")
     if is_vectorized:
-        avals = [a if not a else a['value'] for a in args]
-        x = args[0]
-        xval = avals[0]
-        xtype = x['type']
-        x_callable = is_callable(xval) # is a function
-        other_callables = False
-        other_args = []
-        for arg in avals[1:]:
-            if is_callable(arg):
-                other_callables = True
-            other_args.append(arg)
-        if x_callable:
-            out_types = 'cur_json'
-        elif isinstance(out_types, list):
-            out_types = out_types[0] if xtype == 'expr' else out_types[1]
-        elif out_types == '?':
-            out_types = xtype
-        else:
-            out_types = out_types
-        ast_tok_builder = AST_TOK_BUILDER_MAP[out_types]
         if xtype == 'expr':
             if other_callables:
                 if isinstance(xval, dict):
@@ -351,18 +353,6 @@ def apply_arg_function(func, out_types, is_vectorized, *args): # inp, *args):
             return ast_tok_builder(lambda inp: func(xval, *[a if not is_callable(a) else a(inp) for a in other_args]))
         return ast_tok_builder(func(xval, *other_args))
     # the following is if it's NOT vectorized
-    avals = [a if not a else a['value'] for a in args]
-    x = args[0]
-    other_args = []
-    xval = avals[0]
-    xtype = x['type']
-    x_callable = is_callable(xval) # is a function
-    other_callables = False
-    for arg in avals[1:]:
-        if is_callable(arg):
-            other_callables = True
-        other_args.append(arg)
-    ast_tok_builder = AST_TOK_BUILDER_MAP[out_types]
     if x_callable:
         if other_callables:
             return ast_tok_builder(lambda inp: func(x(inp), *[a if not is_callable(a) else a(inp) for a in other_args]))
@@ -545,7 +535,8 @@ Does not resolve binops.'''
                 k = children[0] if isinstance(children[0], str) else 0
             if ixtype_end == 'list':
                 # varname_list (e.g. [bar,baz], .foo) or slicer_list (e.g. [0], [1,2:])
-                idx_func = apply_multi_index(children)
+                is_varname_list = (ixtype == 'varname_list')
+                idx_func = apply_multi_index(children, is_varname_list)
             elif ixtype == 'expr':
                 # a static boolean index (based on some JSON defined within the query)
                 # something like j`[true,false,true]`
@@ -807,10 +798,11 @@ def test_apply_indexer_list(tester, idx_strings, obj, correct_out):
     for idxr in idxrs:
         children = idxr['children']
         has_one_option, k = False, None
+        is_varname_list = (idxr['type'] == 'varname_list')
         if len(idxr) == 1 and isinstance(children[0], (str, int)):
             has_one_option = True
             k = idxr[0] if isinstance(children[0], str) else 0
-        ix_k_hasopt.append((apply_multi_index(children), k, has_one_option, False))
+        ix_k_hasopt.append((apply_multi_index(children, is_varname_list), k, has_one_option, False))
     tester.assertEqual(apply_indexer_list(ix_k_hasopt)(obj), correct_out)
     
 
@@ -979,22 +971,22 @@ class RemesPathTester(unittest.TestCase):
         self.assertEqual(apply_regex_index({'ab': 1, 'ba': 2, 'c': 3}, re.compile('^a')), {'ab': 1})
 
     def test_multi_index_regex_str(self):
-        self.assertEqual(apply_multi_index([re.compile('^a'), 'c'])({'ab': 1, 'ba': 2, 'c': 3}), {'ab': 1, 'c': 3})
+        self.assertEqual(apply_multi_index([re.compile('^a'), 'c'], True)({'ab': 1, 'ba': 2, 'c': 3}), {'ab': 1, 'c': 3})
 
     def test_multi_index_only_str(self):
-        self.assertEqual(apply_multi_index(['a', 'c'])({'ab': 1, 'ba': 2, 'c': 3}), {'c': 3})
+        self.assertEqual(apply_multi_index(['a', 'c'], True)({'ab': 1, 'ba': 2, 'c': 3}), {'c': 3})
 
     def test_multi_index_one_int_arr(self):
-        self.assertEqual(apply_multi_index([1])([1,2,3]), [2])
+        self.assertEqual(apply_multi_index([1], False)([1,2,3]), [2])
 
     def test_multi_index_two_int_arr(self):
-        self.assertEqual(apply_multi_index([0,2])([1,2,3]), [1,3])
+        self.assertEqual(apply_multi_index([0,2], False)([1,2,3]), [1,3])
 
     def test_multi_index_slice_int_arr(self):
-        self.assertEqual(apply_multi_index([0, slice(2, None)])([1,2,3]), [1, 3])
+        self.assertEqual(apply_multi_index([0, slice(2, None)], False)([1,2,3]), [1, 3])
 
     def test_multi_index_slice_arr_int(self):
-        self.assertEqual(apply_multi_index([slice(2, None), 0])([1,2,3]), [3, 1])
+        self.assertEqual(apply_multi_index([slice(2, None), 0], False)([1,2,3]), [3, 1])
 
     def test_binop_two_jsons_arrs(self):
         x = [1,2,3]
@@ -1292,6 +1284,24 @@ class RemesPathTester(unittest.TestCase):
         
     def test_search_idx_binop(self):
         self.assertEqual(search("@[:].bar < 3", [{'foo': 2, 'bar': 1}, {'foo': 1, 'bar': 3}]), [True, False])
+        
+    def test_search_arg_function_expr_binop_scalar(self):
+        self.assertEqual(search("sorted(@) == 3", [3, 1]), [False, True])
+    
+    def test_search_arg_function_expr_binop_expr(self):
+        self.assertEqual(search("sorted(@) * @", [3, 1]), [3, 3])
+        
+    def test_search_arg_function_scalar_binop_scalar(self):
+        self.assertEqual(search("sum(@) / 4", [1, 3]), 1.0)
+        
+    def test_search_arg_function_scalar_binop_expr(self):
+        self.assertEqual(search("@ / max(@)", [1, 4]), [0.25, 1.])
+        
+    def test_search_arg_function_expr_binop_argfunc_scalar(self):
+        self.assertEqual(search("sorted(@, true)/len(@)", [1, 3]), [1.5, 0.5])
+        
+    def test_search_arg_function_expr_binop_argfunc_expr(self):
+        self.assertEqual(search("sorted(@) * log2(@)", [4, 1]), [2.0, 0])
         
     ###############
     ## search tests with indexing
