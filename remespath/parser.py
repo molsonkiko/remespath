@@ -66,6 +66,7 @@ import operator
 import re
 import unittest
 import logging
+import itertools
 
 logging.basicConfig(level=logging.ERROR, format='%(asctime)s %(message)s') #, filename="remespath.log", filemode='w')
 RemesPathLogger = logging.getLogger(name='RemesPathLogger')
@@ -113,6 +114,17 @@ class VectorizedArithmeticException(Exception):
 ## INDEXER FUNCTIONS
 ##############
 
+def consume_from_indexer(idxr):
+    '''try to consume the first value pair from an indexer.
+    If the indexer is empty, return None, None, None
+    Else return the first value pair and the indexer'''
+    try:
+        a, b = next(idxr)
+        return a, b, idxr
+    except StopIteration:
+        return None, None, None
+
+
 def apply_multi_index(inds, is_varname_list):
     '''x: a list or dict
 inds: a list of indices or keys to select'''
@@ -120,24 +132,19 @@ inds: a list of indices or keys to select'''
         return lambda x: apply_multi_index(inds(x), is_varname_list)(x)
     if is_varname_list:
         def outfunc(x, inds):
-            out = {}
             for k in inds:
                 if k in x:
-                    out[k] = x[k]
+                    yield k, x[k]
                 elif isinstance(k, re.Pattern):
-                    out.update(apply_regex_index(x, k))
-            return out
+                    yield from apply_regex_index(x, k)
     else:
         def outfunc(x, inds):
-            out = []
-            lenx = len(x)
-            for k in inds:
+            for ii, k in enumerate(inds):
                 if isinstance(k, int):
-                    if k < lenx:
-                        out.append(x[k])
+                    if k < len(x):
+                        yield ii, x[k]
                 else:
-                    out.extend(x[k])
-            return out
+                    yield from enumerate(x[k])
     return lambda x: outfunc(x, inds)
 
 
@@ -148,71 +155,84 @@ def apply_boolean_index(inds):
             inds = indfunc(x)
         if len(inds) != len(x):
             raise VectorizedArithmeticException(f"Boolean index length ({len(inds)}) != object/array length ({len(x)})")
-        out = None
         try:
             if isinstance(x, dict):
-                out = {}
                 for k, v in x.items():
                     ind = inds.get(k, False)
                     if not isinstance(ind, bool):
                         raise VectorizedArithmeticException('boolean index contains non-booleans')
                     if ind:
-                        out[k] = v
+                        yield k, v
             elif isinstance(x, list):
-                out = []
-                for v, ind in zip(x, inds):
+                for ii, (v, ind) in enumerate(zip(x, inds)):
                     if not isinstance(ind, bool):
                         raise VectorizedArithmeticException('boolean index contains non-booleans')
                     if ind:
-                        out.append(v)
+                        yield ii, v
         except Exception as ex:
             raise VectorizedArithmeticException(str(ex))
-        return out
     return lambda x: outfunc(x, inds)
 
 
 def apply_regex_index(obj, regex):
-    return {k: v for k, v in obj.items() if regex.search(k)}
+    return ((k, v) for k, v in obj.items() if regex.search(k))
 
 
 def apply_indexer_list(indexers):
     '''recursively search an object to match indexers'''
     def outfunc(obj, indexers):
-        idxr, k, has_one_option, is_projection = indexers[0]
-        result = idxr(obj)
-        if is_projection:
-            if len(indexers) == 1:
-                return result
-            return outfunc(result, indexers[1:])
+        idxr, has_one_option, is_projection, is_dict = indexers[0]
+        k1, v1, result = consume_from_indexer(idxr(obj))
+        is_dict = is_dict or isinstance(k1, str)
         RemesPathLogger.info(f"In apply_indexer_list.outfunc, idxr = {idxr}, obj = {obj}, result = {result}")
+        if result is None:
+            if is_dict:
+                return {}
+            return []
         if len(indexers) == 1:
-            if result and has_one_option:
-                if not is_callable(result):
-                    return result[k]
-                return result(obj)[k]
-            if not is_callable(result):
-                return result
-            return result(obj)
-        if isinstance(result, dict):
+            if has_one_option:
+                return v1
+            if is_dict:
+                out = {k1: v1}
+                for k, v in result:
+                    out[k] = v
+                return out
+            out = [v1]
+            for _, v in result:
+                out.append(v)
+            return out
+        if is_projection:
+            if is_dict:
+                out = {k1: v1}
+                for k, v in result:
+                    out[k] = v
+                return outfunc(out, indexers[1:])
+            out = [v1]
+            for _, v in result:
+                out.append(v)
+            return outfunc(out, indexers[1:])
+        if is_dict:
             if has_one_option:
                 # don't need to specify the key when only one key is possible
-                if k not in result:
-                    return
-                return outfunc(result[k], indexers[1:])
+                return outfunc(v1, indexers[1:])
             out = {}
-            for k, v in result.items():
+            v1_subdex = outfunc(v1, indexers[1:])
+            if v1_subdex:
+                out[k1] = v1_subdex
+            for k, v in result:
                 subdex = outfunc(v, indexers[1:])
                 if subdex:
                     out[k] = subdex
             return out
-        # obj is a list
-        if not result:
-            return result
+        # obj is a list iterator
         if has_one_option:
             # don't need an array output when you're getting a single index
-            return outfunc(result[0], indexers[1:])
+            return outfunc(v1, indexers[1:])
+        v1_subdex = outfunc(v1, indexers[1:])
         out = []
-        for v in result:
+        if v1_subdex:
+            out.append(v1_subdex)
+        for _, v in result:
             subdex = outfunc(v, indexers[1:])
             if subdex:
                 out.append(subdex)
@@ -412,7 +432,7 @@ def parse_indexer(query, ii):
             raise RemesParserException("'.' syntax for indexers only allows a single key or regex as indexer", ii, query)
         return varname_list([nt['value']]), ii + 2
     elif tv == '{':
-        return parse_projection(query, ii + 1) 
+        return parse_projection(query, ii + 1)
     elif tv != '[':
         raise RemesParserException('Indexer must start with "." or "["', ii, query)
     children = []
@@ -525,17 +545,15 @@ Does not resolve binops.'''
             ixtype = cur_idxr['type']
             ixtype_end = ixtype[-4:]
             children = cur_idxr.get('children') or cur_idxr['value']
+            is_varname_list = (ixtype == 'varname_list')
             has_one_option = False
-            k = None
             is_projection = False
             if isinstance(children, list) and len(children) == 1 and isinstance(children[0], (int, str)):
                 # it's more user-friendly to only return the value in a single
                 # key-value pair or a single index from an array
                 has_one_option = True
-                k = children[0] if isinstance(children[0], str) else 0
             if ixtype_end == 'list':
                 # varname_list (e.g. [bar,baz], .foo) or slicer_list (e.g. [0], [1,2:])
-                is_varname_list = (ixtype == 'varname_list')
                 idx_func = apply_multi_index(children, is_varname_list)
             elif ixtype == 'expr':
                 # a static boolean index (based on some JSON defined within the query)
@@ -551,8 +569,8 @@ Does not resolve binops.'''
                 # it's a boolean index based on the current object (a cur_json)
                 # something like [@.bar <= @.baz]
                 idx_func = apply_boolean_index(children)
-            RemesPathLogger.info(f"In parse_expr_or_scalar, found indexer {cur_idxr}, k = {k}, children = {children}")
-            idxrs.append((idx_func, k, has_one_option, is_projection))
+            RemesPathLogger.info(f"In parse_expr_or_scalar, found indexer {cur_idxr}, children = {children}")
+            idxrs.append((idx_func, has_one_option, is_projection, is_varname_list))
             nt = peek_next_token(query, ii - 1)
         if idxrs:
             if last_tok['type'] == 'cur_json':
@@ -730,15 +748,13 @@ def parse_projection(query, ii):
                 RemesPathLogger.debug(f"At return of parse_projection, children = {children}")
                 if isinstance(children, dict):
                     def outfunc(obj):
-                        out = {}
                         for k, v in children.items():
                             if is_callable(v):
-                                out[k] = v(obj)
+                                yield k, v(obj)
                             else:
-                                out[k] = v
-                        return out
+                                yield k, v
                 else:
-                    outfunc = lambda obj: [v if not is_callable(v) else v(obj) for v in children]
+                    outfunc = lambda obj: ((ii, v) if not is_callable(v) else (ii, v(obj)) for ii, v in enumerate(children))
                 return projection(outfunc), ii + 1
             if nt['value'] != ',':
                 raise RemesParserException("Values or key-value pairs in a projection must be comma-separated", ii, query)
@@ -767,7 +783,7 @@ def test_parse_indexer(tester, x, out):
         tester.assertEqual(out, idx['value'])
     else:
         tester.assertEqual(out, idx['children'])
-        
+
 
 def test_parse_arg_function(tester, funcname, argstring, obj, correct_out):
     toks = tokenize(argstring)
@@ -779,32 +795,31 @@ def test_parse_arg_function(tester, funcname, argstring, obj, correct_out):
         tester.assertEqual(resval(obj), correct_out)
         return
     tester.assertEqual(result, (correct_out, len(toks)))
-    
-    
+
+
 def test_parse_expr_or_scalar_func(tester, inp, obj, correct_out):
     toks = tokenize(inp)
     result = parse_expr_or_scalar_func(toks, 0)
     resval = result[0]['value']
     if is_callable(resval):
-        # output token value is a function, so call it 
+        # output token value is a function, so call it
         tester.assertEqual(resval(obj), correct_out)
         return
     tester.assertEqual(result, (correct_out, len(toks)))
-    
+
 
 def test_apply_indexer_list(tester, idx_strings, obj, correct_out):
     idxrs = [parse_indexer(tokenize(ix), 0)[0] for ix in idx_strings]
     ix_k_hasopt = []
     for idxr in idxrs:
         children = idxr['children']
-        has_one_option, k = False, None
+        has_one_option = False
         is_varname_list = (idxr['type'] == 'varname_list')
         if len(idxr) == 1 and isinstance(children[0], (str, int)):
             has_one_option = True
-            k = idxr[0] if isinstance(children[0], str) else 0
-        ix_k_hasopt.append((apply_multi_index(children, is_varname_list), k, has_one_option, False))
+        ix_k_hasopt.append((apply_multi_index(children, is_varname_list), has_one_option, False, is_varname_list))
     tester.assertEqual(apply_indexer_list(ix_k_hasopt)(obj), correct_out)
-    
+
 
 class RemesPathTester(unittest.TestCase):
     ##############
@@ -900,7 +915,7 @@ class RemesPathTester(unittest.TestCase):
 
     def test_parse_indexer_int_slicer(self):
         test_parse_indexer(self, '[1,2:]', [1, slice(2, None)])
-        
+
     def test_parse_indexer_slicer_int(self):
         test_parse_indexer(self, '[2:,1]', [slice(2, None), 1])
 
@@ -968,25 +983,25 @@ class RemesPathTester(unittest.TestCase):
                          {'a': True, 'b': False})
 
     def test_regex_index(self):
-        self.assertEqual(apply_regex_index({'ab': 1, 'ba': 2, 'c': 3}, re.compile('^a')), {'ab': 1})
+        self.assertEqual(dict(apply_regex_index({'ab': 1, 'ba': 2, 'c': 3}, re.compile('^a'))), {'ab': 1})
 
     def test_multi_index_regex_str(self):
-        self.assertEqual(apply_multi_index([re.compile('^a'), 'c'], True)({'ab': 1, 'ba': 2, 'c': 3}), {'ab': 1, 'c': 3})
+        self.assertEqual(dict(apply_multi_index([re.compile('^a'), 'c'], True)({'ab': 1, 'ba': 2, 'c': 3})), {'ab': 1, 'c': 3})
 
     def test_multi_index_only_str(self):
-        self.assertEqual(apply_multi_index(['a', 'c'], True)({'ab': 1, 'ba': 2, 'c': 3}), {'c': 3})
+        self.assertEqual(dict(apply_multi_index(['a', 'c'], True)({'ab': 1, 'ba': 2, 'c': 3})), {'c': 3})
 
     def test_multi_index_one_int_arr(self):
-        self.assertEqual(apply_multi_index([1], False)([1,2,3]), [2])
+        self.assertEqual([x[1] for x in apply_multi_index([1], False)([1,2,3])], [2])
 
     def test_multi_index_two_int_arr(self):
-        self.assertEqual(apply_multi_index([0,2], False)([1,2,3]), [1,3])
+        self.assertEqual([x[1] for x in apply_multi_index([0,2], False)([1,2,3])], [1,3])
 
     def test_multi_index_slice_int_arr(self):
-        self.assertEqual(apply_multi_index([0, slice(2, None)], False)([1,2,3]), [1, 3])
+        self.assertEqual([x[1] for x in apply_multi_index([0, slice(2, None)], False)([1,2,3])], [1, 3])
 
     def test_multi_index_slice_arr_int(self):
-        self.assertEqual(apply_multi_index([slice(2, None), 0], False)([1,2,3]), [3, 1])
+        self.assertEqual([x[1] for x in apply_multi_index([slice(2, None), 0], False)([1,2,3])], [3, 1])
 
     def test_binop_two_jsons_arrs(self):
         x = [1,2,3]
@@ -1081,7 +1096,7 @@ class RemesPathTester(unittest.TestCase):
 
     def test_parse_arg_function_scalar_arg_function_args(self):
         test_parse_arg_function(self, 'round', '(23.567, s_len(`2b`))', [], num(23.57))
-        
+
     def test_parse_arg_function_non_vectorized(self):
         test_parse_arg_function(self, 'sum', '(ifelse(j`[true,false,true]`, 2, 1))', [],  num(5))
 
@@ -1093,10 +1108,10 @@ class RemesPathTester(unittest.TestCase):
 
     def test_flatten(self):
         test_parse_arg_function(self, 'flatten', '(@)', [[1], [2]], [1,2])
-        
+
     def test_flatten_2(self):
         test_parse_arg_function(self, 'flatten', '(@, 2)', [[[1]], [[2], 3]], [1,2,3])
-        
+
     ##############
     ## parse_expr_or_scalar_func tests
     ##############
@@ -1209,106 +1224,106 @@ class RemesPathTester(unittest.TestCase):
     ################
     def test_search_sort_by_key(self):
         self.assertEqual(search("sort_by(@, foo)", [{'foo': 2, 'bar': 1}, {'foo': 1, 'bar': 3}]), [{'foo': 1, 'bar': 3}, {'foo': 2, 'bar': 1}])
-        
+
     def test_search_sort_by_key_reverse(self):
         self.assertEqual(search("sort_by(@, a, true)", [{'a': 1, 'b': 2}, {'a': 2, 'b': 1}]), [{'a': 2, 'b': 1}, {'a': 1, 'b': 2}])
-        
+
     def test_search_max_by_key(self):
         self.assertEqual(search("max_by(@, foo)", [{'foo': 2, 'bar': 1}, {'foo': 1, 'bar': 3}]), {'foo': 2, 'bar': 1})
-        
+
     def test_search_min_by_key(self):
         self.assertEqual(search("min_by(@, foo)", [{'foo': 2, 'bar': 1}, {'foo': 1, 'bar': 3}]), {'foo': 1, 'bar': 3})
-        
+
     def test_search_max_by_idx(self):
         self.assertEqual(search('max_by(@, 0)', [[1, 2], [3, 0]]), [3, 0])
-        
+
     def test_search_min_by_idx(self):
         self.assertEqual(search('min_by(@, 0)', [[1, 2], [3, 0]]), [1, 2])
-        
+
     def test_search_sort_by_idx(self):
         self.assertEqual(search('sort_by(@, 0, true)', [[1, 2], [3, 0]]), [[3, 0], [1, 2]])
-        
+
     def test_search_is_str_num_expr(self):
         inputs = ["`a`", "1", "j`[[2]]`", "-1.0", "true"]
         for func, correct_results in [
             ['is_str', [True, False, [False], False, False]],
-            ['is_num', [False, True, [False], True, True]], 
+            ['is_num', [False, True, [False], True, True]],
             ['is_expr', [False, False, [True], False, False]],
         ]:
             for input_, correct_result in zip(inputs, correct_results):
                 with self.subTest(input_=input_, func=func, correct_result=correct_result):
                     self.assertEqual(search(f"{func}({input_})", []), correct_result)
-                    
+
     def test_search_unique(self):
         self.assertEqual(set(search("unique(@)", [1,1,2,3,1,3,3])), {1,2,3})
-        
+
     def test_search_unique_sorted(self):
         self.assertEqual(search("unique(@)", [1,1,2,3,1,3,3]), [1,2,3])
-        
+
     def test_search_value_counts(self):
         self.assertEqual(search("value_counts(@)", list('abca')), {'a': 2, 'b': 1, 'c': 1})
-        
+
     def test_search_s_sub(self):
         self.assertEqual(search("s_sub(@, `a`, `b`)", ["a bad dog"]), ["b bbd dog"])
-        
+
     def test_search_s_sub_regex(self):
         self.assertEqual(search("s_sub(@, g`(?i)a`, `b`)", ["A bad dog"]), ["b bbd dog"])
-        
+
     def test_search_len_function(self):
         self.assertEqual(search("len(@)", [1,2,3]), 3)
 
     def test_search_len_function_j_json(self):
         self.assertEqual(search("len(j`[1,2,3]`)", []), 3)
-        
+
     def test_search_s_slice(self):
         self.assertEqual(search('s_slice(`abc`, ::2)', []), 'ac')
 
     def test_search_scalar_argfunc_with_cur_js_argfunc_arg(self):
         self.assertEqual(search("str(len(@))", [1,2,3]), '3')
-        
+
     def test_search_iterable_argfunc_with_cur_js_argfunc_arg(self):
         self.assertEqual(search("sorted(values(@))", {'foo': 2, 'bar': 1}), [1, 2])
-    
+
     def test_search_isna(self):
         self.assertEqual(search("isna(@)", [1, float('nan')]), [False, True])
-    
-    
+
+
     ################
     ## search tests with binops
     ################
     def test_search_curdoc_binop_curdoc(self):
         self.assertEqual(search("@ ** @", [1,2]), [1,4])
-        
+
     def test_search_uminus_curdoc(self):
         self.assertEqual(search("-@", [1]), [-1])
-        
+
     def test_search_idx_binop(self):
         self.assertEqual(search("@[:].bar < 3", [{'foo': 2, 'bar': 1}, {'foo': 1, 'bar': 3}]), [True, False])
-        
+
     def test_search_arg_function_expr_binop_scalar(self):
         self.assertEqual(search("sorted(@) == 3", [3, 1]), [False, True])
-    
+
     def test_search_arg_function_expr_binop_expr(self):
         self.assertEqual(search("sorted(@) * @", [3, 1]), [3, 3])
-        
+
     def test_search_arg_function_scalar_binop_scalar(self):
         self.assertEqual(search("sum(@) / 4", [1, 3]), 1.0)
-        
+
     def test_search_arg_function_scalar_binop_expr(self):
         self.assertEqual(search("@ / max(@)", [1, 4]), [0.25, 1.])
-        
+
     def test_search_arg_function_expr_binop_argfunc_scalar(self):
         self.assertEqual(search("sorted(@, true)/len(@)", [1, 3]), [1.5, 0.5])
-        
+
     def test_search_arg_function_expr_binop_argfunc_expr(self):
         self.assertEqual(search("sorted(@) * log2(@)", [4, 1]), [2.0, 0])
-        
+
     ###############
     ## search tests with indexing
     ###############
     def test_search_dot(self):
         self.assertEqual(search("@.foo", {'foo': 1}), 1)
-        
+
     def test_search_dot_j_json(self):
         self.assertEqual(search('j`{"foo": 1}`.foo', []), 1)
 
@@ -1330,10 +1345,10 @@ class RemesPathTester(unittest.TestCase):
             except Exception as ex:
                 mismatches += f'with query {syntax}, {str(ex)} != {correct_out}\n'
         self.assertTrue(bool(mismatches), msg=mismatches)
-                        
+
     def test_search_idx_after_bool_idx(self):
         syntax_options = [
-            "@[@[:].foo > 1][0]", 
+            "@[@[:].foo > 1][0]",
         # as with the above alt_syntax test, option 2 is kludgy but OK
         # as an alternative to the syntax I would prefer to work
             "(@[@[:].foo > 1])[0]"
@@ -1349,34 +1364,34 @@ class RemesPathTester(unittest.TestCase):
             except Exception as ex:
                 mismatches += f'with query {syntax}, {str(ex)} != {correct_out}\n'
         self.assertTrue(bool(mismatches), msg=mismatches)
-                        
+
     def test_search_dot_then_slice(self):
         self.assertEqual(search("@.foo[0]", {'foo': [1]}), 1)
-        
+
     def test_search_dot_then_slice_j_json(self):
         self.assertEqual(search('j`{"foo": [1,2]}`.foo[:1]', []), [1])
-        
+
     def test_search_dot_dot(self):
         self.assertEqual(search("@.foo.bar", {'foo': {'bar': 1}}), 1)
-        
+
     def test_search_dot_dot_j_json(self):
         self.assertEqual(search('j`{"foo": {"bar": 1}}`.foo.bar', []), 1)
-        
+
     def test_search_bool_idx_arr(self):
         self.assertEqual(search("@[@ >= 2]", [1,2,3]), [2, 3])
-        
+
     def test_search_bool_idx_dict(self):
         self.assertEqual(search("@[@ > 2]", {'a': 1, 'b': 3}), {'b': 3})
-        
+
     def test_search_bool_idx_j_json(self):
         self.assertEqual(search("j`[1,2,3]`[j`[1,2,3]` >= 2]", []), [2, 3])
-        
+
     def test_search_idx_on_expr_function(self):
         self.assertEqual(search("sorted(@)[0]", [2, 1]), 1)
-    
+
     def test_search_idx_curdoc_bool_idx(self):
         syntax_options = [
-            "@[:][@.foo == 1]", 
+            "@[:][@.foo == 1]",
             # as with the above alt_syntax test, option 2 is kludgy but OK
             # as an alternative to the syntax I would prefer to work
             "@[@[:].foo == 1]"
@@ -1392,52 +1407,52 @@ class RemesPathTester(unittest.TestCase):
             except Exception as ex:
                 mismatches += f'with query {syntax}, {str(ex)} != {correct_out}\n'
         self.assertTrue(bool(mismatches), msg=mismatches)
-        
+
     def test_search_arg_function_scalar_query_result(self):
         self.assertEqual(search("str(@.foo)", {'foo': 1}), '1')
-        
+
     def test_search_dot_parens_idx(self):
         self.assertEqual(search("(@.foo)[0]", {'foo': [1,2], 'bar': 'a'}), 1)
-        
+
     def test_search_dot_parens_dot(self):
         self.assertEqual(search('(@.foo).bar', {'foo': {'bar': 1}}), 1)
-        
+
     def test_search_idx_parens_dot(self):
         self.assertEqual(search('(@[0]).a', [{'a': 1, 'b': 2}, {'a': 3, 'b': 4}]), 2)
-        
+
     def test_search_idx_parens_idx(self):
         self.assertEqual(search('(@[:1])[1:]', [[1,2],[3,4]]), [[2]])
-        
+
     ###############
     ## projections
     ###############
     def test_projection_obj(self):
         self.assertEqual(search("@{foo: @[0], bar: @[1]}", [1, 2]), {'foo': 1, 'bar': 2})
-        
+
     def test_projection_arr(self):
         self.assertEqual(search("@{sum(@.hits), @.foo}", {'foo': 'bar', 'hits': [1,2,3]}), [6, 'bar'])
-        
+
     def test_projection_arr_after_bool_idx(self):
         self.assertEqual(search("@[@[:].foo == 1]{@.foo, @.bar}", [{'foo': 1, 'bar': 3}, {'foo': 2, 'bar': 1}]), [[1, 3]])
-        
+
     def test_projection_arr_after_idx(self):
         self.assertEqual(search("@[:]{@.foo, @.bar}", [{'foo': 1, 'bar': 3}, {'foo': 2, 'bar': 1}]), [[1, 3], [2, 1]])
-        
+
     def test_projection_arr_before_idx(self):
         self.assertEqual(search("@[:]{@.foo, @.bar}[1:]", [{'foo': 1, 'bar': 3}, {'foo': 2, 'bar': 1}]), [[3], [1]])
-        
+
     def test_arg_func_projection_arr(self):
         self.assertEqual(search("len(@{@.foo * @.bar})", {'foo': 1, 'bar': 2}), 1)
-        
+
     def test_projection_arr_parens_then_idx(self):
         self.assertEqual(search("(@[:]{@.foo, @.bar})[1]", [{'foo': 1, 'bar': 3}, {'foo': 2, 'bar': 1}]), [2, 1])
-        
+
     def test_projection_obj_then_dot(self):
         self.assertEqual(search("@{foo: @[0], bar: @[1]}.foo", [1, 2]), 1)
-        
+
     def test_projection_obj_parens_then_dot(self):
         self.assertEqual(search("(@{foo: @[0], bar: @[1]}).foo", [1,2]), 1)
-        
+
 
 if __name__ == '__main__':
     unittest.main()
