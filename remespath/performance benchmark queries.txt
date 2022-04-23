@@ -1,0 +1,14 @@
+COMPLEX QUERY SMALL FILE
+baseball2 is a < 1kb nested JSON object. This is essentially a GROUP BY
+aggregation query.
+for ii in range(200):
+	search("sort_by(@[:]"
+			"{name: @.name, hits: "
+				"sum(flatten(@.players[:].hits[@ > 0]))"
+			"}, "
+			"hits, true)",
+		baseball2)
+SIMPLE QUERY LARGE FILE
+monday is a 5MB object containing 453 tweets from the Twitter API.
+for ii in range(2): 
+	montext = search('@[:].full_text =~ `(?i)happy`', monday)

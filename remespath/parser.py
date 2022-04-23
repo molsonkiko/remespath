@@ -66,7 +66,6 @@ import operator
 import re
 import unittest
 import logging
-import itertools
 
 logging.basicConfig(level=logging.ERROR, format='%(asctime)s %(message)s') #, filename="remespath.log", filemode='w')
 RemesPathLogger = logging.getLogger(name='RemesPathLogger')
