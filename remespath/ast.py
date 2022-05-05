@@ -3,37 +3,47 @@
 LANGUAGE_SPEC = '''
 expr ::= json (ws indexer_list)? projection?
 projection ::= object_projection | array_projection
-object_projection ::= "{" ws key_value_pair ws ("," ws key_value_pair ws)* "}"
-array_projection ::= "{" ws expr_function ws ("," ws expr_function ws)* "}"
-key_value_pair ::= string ws ":" ws expr_function
+object_projection ::= l_curlybrace ws key_value_pair ws (comma ws key_value_pair ws)* r_curlybrace
+array_projection ::= l_curlybrace ws expr_function ws (comma ws expr_function ws)* r_curlybrace
+l_curlybrace ::= "{"
+r_curlybrace ::= "}"
+key_value_pair ::= string ws colon ws expr_function
 json ::= cur_json | json_string
 cur_json ::= "@"
-indexer_list ::= indexer+
-indexer ::= "." varname
-            | "[" ws boolean_index ws "]"
-            | "[" ws varname_list ws "]"
-            | "[" ws slicer_list ws "]"
+indexer_list ::= double_dot_indexer? indexer+
+indexer ::= dot single_varname
+            | l_squarebrace ws boolean_index ws r_squarebrace
+            | l_squarebrace ws varname_list ws r_squarebrace
+            | l_squarebrace ws slicer_list ws r_squarebrace
+double_dot_indexer ::= dot single_varname
+                        | dot dot l_squarebrace ws boolean_index ws r_squarebrace
+                        | dot dot l_squarebrace ws varname_list ws r_squarebrace
+                        | dot dot l_squarebrace ws slicer_list ws r_squarebrace
+l_squarebrace ::= "["
+r_squarebrace ::= "]"
 expr_function ::= expr
                   | (expr | scalar_function) ws binop ws expr
                   | expr ws binop ws (expr | scalar_function)
                   | expr_arg_function
-                  | "(" expr_function ")"
+                  | lparen expr_function rparen
 scalar_function ::= scalar
                     | scalar_function ws binop ws scalar_function
                     | scalar_arg_function
-                    | "(" scalar_function ")"
+                    | lparen scalar_function rparen
 boolean_index ::= expr_function
-expr_arg_function ::= unquoted_string ws "(" ws expr_function ws ("," ws (expr_function | scalar_function) ws)* ")"
-scalar_arg_function ::= unquoted_string ws "(" ws scalar_function ws ("," ws scalar_function ws)* ")"
-slicer_list ::= slicer ws ("," ws slicer ws)*
-varname_list ::= varname ws ("," ws varname ws)*
-slicer ::= int | int? ":" int? ":" int?
+expr_arg_function ::= unquoted_string ws lparen ws expr_function ws (comma ws (expr_function | scalar_function) ws)* rparen
+scalar_arg_function ::= unquoted_string ws lparen ws scalar_function ws (comma ws scalar_function ws)* rparen
+single_varname ::= varname | star
+slicer_list ::= star | slicer ws (comma ws slicer ws)*
+star ::= "*"
+varname_list ::= varname ws (comma ws varname ws)*
+slicer ::= int | int? colon int? colon int?
 scalar ::= quoted_string | num | regex | constant
 varname ::= string | regex
 string ::= quoted_string | unquoted_string
-regex ::= "g" quoted_string
-json_string ::= "j" quoted_string
-quoted_string ::= "`" ascii_char* "`" ; "`" inside the string must be escaped by "\\"; see the BACKTICK_STRING_REGEX below
+regex ::= g quoted_string
+json_string ::= j quoted_string
+quoted_string ::= backtick ascii_char* backtick ; "`" inside the string must be escaped by "\\"; see the BACKTICK_STRING_REGEX below
 unquoted_string ::= "[a-zA-Z_][a-zA-Z_0-9]*"
 ascii_char ::= "[\x00-\xff]"
 num ::= int dec_part? exp_part?
@@ -45,7 +55,12 @@ null ::= "null"
 bool ::= "true" | "false"
 ws ::= "[ \t\n\r]*"
 binop ::= "&" | "|" | "^" | "=~" | "[=><!]=" | "<" | ">" | "+" | "-"
-          | "/" | "//" | "*{1, 2}" | "in"
+          | "/" | "//" | star | star star | "in"
+colon ::= ":"
+comma ::= ","
+dot ::= "."
+g ::= "g"
+j ::= "j"
 '''
 import re
 inf = float('inf')
@@ -86,7 +101,7 @@ def delim(value):
     return {'type': 'delim', 'value': value}
 
 
-INDEXER_SUBTYPES = {'slicer_list', 'varname_list', 'boolean_index'}
+INDEXER_SUBTYPES = {'slicer_list', 'varname_list', 'boolean_index', 'star_indexer_list'}
 
 
 def int_node(value):
@@ -129,6 +144,10 @@ def slicer_list(slicers):
     return {'type': 'slicer_list', 'children': slicers}
 
 
+def star_indexer_list():
+    return {'type': 'star_indexer_list', 'children': None}
+
+
 def string(value):
     return {'type': 'string', 'value': value}
 
@@ -155,6 +174,7 @@ AST_TOK_BUILDER_MAP = {
     'slicer_list': slicer_list,
     'string': string,
     'varname_list': varname_list,
+    'star_indexer_list': star_indexer_list,
 }
 
 AST_TYPE_BUILDER_MAP = {

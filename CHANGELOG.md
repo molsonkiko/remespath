@@ -9,15 +9,31 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 ### To Be Added
 
 - better documentation
+- code coverage site
+- assignment/in-place mutation operations
+- recursive search
+- Publish version to PYPI
  
 ### To Be Changed
 
  
 ### To Be Fixed
 
-- Boolean indexing is broken
-- Need faster operations that use current_doc; don't want to rebuild the AST at every node
-- Make sure ABNF grammar in LANGUAGE_SPEC is valid
+- Improve performance, probably by reducing memory copy during boolean indexing
+
+## [0.2.0] - 2022-05-05
+
+Appears to be bug-free for most if not all reasonable queries. Passes the full test suite.
+
+Performance is still very slow compared to e.g. gorp.jsonpath (see my other package, gorpy) for the subset of queries that can be executed in those other implementations.
+
+### Fixed 
+
+- Many bugs
+
+### Added
+
+- Projections (e.g., `search('@{@.foo, @.bar}', {'foo': 1, 'bar': 2})` returns `[1, 2]`)
 
 ## [0.1.0] - 2022-04-16
 

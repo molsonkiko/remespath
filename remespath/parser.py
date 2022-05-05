@@ -66,8 +66,10 @@ import operator
 import re
 import unittest
 import logging
+from functools import lru_cache # for memoizing previously compiled queries
 
-logging.basicConfig(level=logging.ERROR, format='%(asctime)s %(message)s') #, filename="remespath.log", filemode='w')
+
+logging.basicConfig(level=logging.WARNING, format='%(asctime)s %(message)s') #, filename="remespath.log", filemode='w')
 RemesPathLogger = logging.getLogger(name='RemesPathLogger')
 
 
@@ -130,28 +132,36 @@ inds: a list of indices or keys to select'''
     if is_callable(inds):
         return lambda x: apply_multi_index(inds(x), is_varname_list)(x)
     if is_varname_list:
-        def outfunc(x, inds):
+        def multi_idxr_func(x, inds):
             for k in inds:
                 if k in x:
                     yield k, x[k]
                 elif isinstance(k, re.Pattern):
                     yield from apply_regex_index(x, k)
     else:
-        def outfunc(x, inds):
+        def multi_idxr_func(x, inds):
             for ii, k in enumerate(inds):
                 if isinstance(k, int):
                     if k < len(x):
                         yield ii, x[k]
                 else:
                     yield from enumerate(x[k])
-    return lambda x: outfunc(x, inds)
+    return lambda x: multi_idxr_func(x, inds)
 
 
 def apply_boolean_index(inds):
-    def outfunc(x, inds):
+    def bool_idxr_func(x, inds):
         if is_callable(inds):
             indfunc = inds
             inds = indfunc(x)
+        if isinstance(inds, bool):
+            # to allow for boolean indexes like @.bar == @.foo
+            if inds:
+                if isinstance(x, dict):
+                    yield from iter(x.items())
+                else:
+                    yield from enumerate(x)
+            return
         if len(inds) != len(x):
             raise VectorizedArithmeticException(f"Boolean index length ({len(inds)}) != object/array length ({len(x)})")
         try:
@@ -170,7 +180,7 @@ def apply_boolean_index(inds):
                         yield ii, v
         except Exception as ex:
             raise VectorizedArithmeticException(str(ex))
-    return lambda x: outfunc(x, inds)
+    return lambda x: bool_idxr_func(x, inds)
 
 
 def apply_regex_index(obj, regex):
@@ -179,11 +189,11 @@ def apply_regex_index(obj, regex):
 
 def apply_indexer_list(indexers):
     '''recursively search an object to match indexers'''
-    def outfunc(obj, indexers):
+    def idxr_list_func(obj, indexers):
         idxr, has_one_option, is_projection, is_dict = indexers[0]
         k1, v1, result = consume_from_indexer(idxr(obj))
         is_dict = is_dict or isinstance(k1, str)
-        RemesPathLogger.info(f"In apply_indexer_list.outfunc, idxr = {idxr}, obj = {obj}, result = {result}")
+        RemesPathLogger.debug(f"In apply_indexer_list.idxr_list_func, idxr = {idxr}, obj = {obj}, result = {result}")
         if result is None:
             if is_dict:
                 return {}
@@ -205,39 +215,39 @@ def apply_indexer_list(indexers):
                 out = {k1: v1}
                 for k, v in result:
                     out[k] = v
-                return outfunc(out, indexers[1:])
+                return idxr_list_func(out, indexers[1:])
             out = [v1]
             for _, v in result:
                 out.append(v)
-            return outfunc(out, indexers[1:])
+            return idxr_list_func(out, indexers[1:])
         if is_dict:
             if has_one_option:
                 # don't need to specify the key when only one key is possible
-                return outfunc(v1, indexers[1:])
+                return idxr_list_func(v1, indexers[1:])
             out = {}
-            v1_subdex = outfunc(v1, indexers[1:])
+            v1_subdex = idxr_list_func(v1, indexers[1:])
             if v1_subdex:
                 out[k1] = v1_subdex
             for k, v in result:
-                subdex = outfunc(v, indexers[1:])
+                subdex = idxr_list_func(v, indexers[1:])
                 if subdex:
                     out[k] = subdex
             return out
         # obj is a list iterator
         if has_one_option:
             # don't need an array output when you're getting a single index
-            return outfunc(v1, indexers[1:])
-        v1_subdex = outfunc(v1, indexers[1:])
+            return idxr_list_func(v1, indexers[1:])
+        v1_subdex = idxr_list_func(v1, indexers[1:])
         out = []
         if v1_subdex:
             out.append(v1_subdex)
         for _, v in result:
-            subdex = outfunc(v, indexers[1:])
+            subdex = idxr_list_func(v, indexers[1:])
             if subdex:
                 out.append(subdex)
         return out
-        RemesPathLogger.info(f"apply_indexer_list.outfunc returns {result}")
-    return lambda obj: outfunc(obj, indexers)
+        RemesPathLogger.debug(f"apply_indexer_list.idxr_list_func returns {result}")
+    return lambda obj: idxr_list_func(obj, indexers)
 
 
 ###############
@@ -276,7 +286,7 @@ def binop_json_scalar(func, j, s):
 
 def resolve_binop(binop, a, b): # , obj):
     '''apply a binop to two args that are exprs or scalars'''
-    RemesPathLogger.info(f"In resolve_binop, binop = {binop}, a = {a}, b = {b}")
+    RemesPathLogger.debug(f"In resolve_binop, binop = {binop}, a = {a}, b = {b}")
     aval, bval = a['value'], b['value']
     atype, btype = a['type'], b['type']
     out = None
@@ -285,30 +295,34 @@ def resolve_binop(binop, a, b): # , obj):
             outval = binop(aval, bval)
             out = AST_TYPE_BUILDER_MAP[type(outval)](outval)
         elif btype == 'cur_json':
-            out = cur_json(lambda obj: binop_scalar_json(binop, aval, bval(obj)))
+            out = cur_json(lambda obj: binop_two_jsons(binop, aval, bval(obj)))
         else:
-            out = expr(binop_scalar_json(binop, aval, bval))
+            out = expr(binop_two_jsons(binop, aval, bval))
     elif atype == 'cur_json':
-        if btype in SCALAR_SUBTYPES:
-            out = cur_json(lambda obj: binop_json_scalar(binop, aval(obj), bval))
-        elif btype == 'cur_json':
+        # it's probably about 25% slower to always call binop_two_jsons
+        # rather than selecting whether to call binop_json_scalar,
+        # binop_two_jsons, or binop_scalar_json, but currently (as of 5/4/2022)
+        # there's a bug that makes this preferable
+        # if btype in SCALAR_SUBTYPES:
+            # out = cur_json(lambda obj: binop_two_jsons(binop, aval(obj), bval))
+        if btype == 'cur_json':
             out = cur_json(lambda obj: binop_two_jsons(binop, aval(obj), bval(obj)))
         else:
             out = cur_json(lambda obj: binop_two_jsons(binop, aval(obj), bval))
     else:
-        if btype in SCALAR_SUBTYPES:
-            out = expr(binop_json_scalar(binop, aval, bval))
-        elif btype == 'cur_json':
+        # if btype in SCALAR_SUBTYPES:
+            # out = expr(binop_two_jsons(binop, aval, bval))
+        if btype == 'cur_json':
             out = cur_json(lambda obj: binop_two_jsons(binop, aval, bval(obj)))
         else:
             out = expr(binop_two_jsons(binop, aval, bval))
-    RemesPathLogger.info(f"resolve_binop returns {out}")
+    RemesPathLogger.debug(f"resolve_binop returns {out}")
     return out
 
 
 def resolve_binop_tree(binop, a, b):
     '''applies a binop to two args that are exprs, scalars, or other binops'''
-    RemesPathLogger.info(f"In resolve_binop_tree, binop = {binop}, a = {a}, b = {b}")
+    RemesPathLogger.debug(f"In resolve_binop_tree, binop = {binop}, a = {a}, b = {b}")
     if a['type'] == 'binop':
         a = resolve_binop_tree(a['value'][0], *a['children']) # , obj)
     if b['type'] == 'binop':
@@ -351,7 +365,7 @@ def apply_arg_function(func, out_types, is_vectorized, *args): # inp, *args):
                 return ast_tok_builder([func(v, *other_args) for v in xval])
         elif x_callable:
             if other_callables:
-                def outfunc(inp):
+                def arg_outfunc(inp):
                     itbl = xval(inp)
                     othargs = [a if not is_callable(a) else a(inp) for a in other_args]
                     if isinstance(itbl, dict):
@@ -360,14 +374,14 @@ def apply_arg_function(func, out_types, is_vectorized, *args): # inp, *args):
                         return [func(v, *othargs) for v in itbl]
                     return func(itbl, *othargs)
             else:
-                def outfunc(inp):
+                def arg_outfunc(inp):
                     itbl = xval(inp)
                     if isinstance(itbl, dict):
                         return {k: func(v, *other_args) for k, v in itbl.items()}
                     elif isinstance(itbl, list):
                         return [func(v, *other_args) for v in itbl]
                     return func(itbl, *other_args)
-            return ast_tok_builder(outfunc)
+            return ast_tok_builder(arg_outfunc)
         elif other_callables:
             return ast_tok_builder(lambda inp: func(xval, *[a if not is_callable(a) else a(inp) for a in other_args]))
         return ast_tok_builder(func(xval, *other_args))
@@ -427,8 +441,12 @@ def parse_indexer(query, ii):
     tv = t.get('value')
     if tv == '.':
         nt = peek_next_token(query, ii)
-        if nt and nt['type'] not in VARNAME_SUBTYPES:
-            raise RemesParserException("'.' syntax for indexers only allows a single key or regex as indexer", ii, query)
+        if nt:
+            if nt['type'] == 'binop' and nt['value'][0] == operator.mul:
+                # it's a '*', which means all keys.
+                return star_indexer_list()
+            elif nt['type'] not in VARNAME_SUBTYPES:
+                raise RemesParserException("'.' syntax for indexers only allows a single key or regex as indexer", ii, query)
         return varname_list([nt['value']]), ii + 2
     elif tv == '{':
         return parse_projection(query, ii + 1)
@@ -505,7 +523,7 @@ Does not resolve binops.'''
     t = query[ii]
     typ = t['type']
     tv = t.get('value')
-    RemesPathLogger.info(f"in parse_expr_or_scalar, t = {t}, ii = {ii}")
+    RemesPathLogger.debug(f"in parse_expr_or_scalar, t = {t}, ii = {ii}")
     if typ == 'binop':
         raise RemesParserException("Binop without appropriate operands", ii, query)
     elif tv == '(':
@@ -568,16 +586,17 @@ Does not resolve binops.'''
                 # it's a boolean index based on the current object (a cur_json)
                 # something like [@.bar <= @.baz]
                 idx_func = apply_boolean_index(children)
-            RemesPathLogger.info(f"In parse_expr_or_scalar, found indexer {cur_idxr}, children = {children}")
+            RemesPathLogger.debug(f"In parse_expr_or_scalar, found indexer {cur_idxr}, children = {children}")
             idxrs.append((idx_func, has_one_option, is_projection, is_varname_list))
             nt = peek_next_token(query, ii - 1)
         if idxrs:
+            last_val = last_tok['value']
             if last_tok['type'] == 'cur_json':
-                result = lambda obj: apply_indexer_list(idxrs)(obj)
+                result = lambda obj: apply_indexer_list(idxrs)(last_val(obj))
             else:
-                result = apply_indexer_list(idxrs)(last_tok['value'])
+                result = apply_indexer_list(idxrs)(last_val)
             last_tok = AST_TYPE_BUILDER_MAP[type(result)](result)
-    RemesPathLogger.info(f"parse_expr_or_scalar returns {(last_tok, ii)}")
+    RemesPathLogger.debug(f"parse_expr_or_scalar returns {(last_tok, ii)}")
     return last_tok, ii
 
 
@@ -653,7 +672,7 @@ def parse_expr_or_scalar_func(query, ii):
                     left_operand = apply_arg_function(operator.neg, '?', True, left_operand)
                     uminus = False
             curtok = left_operand
-        RemesPathLogger.info(f'In parse_expr_or_scalar_func, root = {root},curtok = {curtok}, uminus = {uminus}')
+        RemesPathLogger.debug(f'In parse_expr_or_scalar_func, root = {root},curtok = {curtok}, uminus = {uminus}')
     if root:
         branch_children[1] = curtok
         RemesPathLogger.debug(f'parse_expr_or_scalar_func resolves binop:\n{root}')
@@ -746,15 +765,15 @@ def parse_projection(query, ii):
             if nt['value'] == '}':
                 RemesPathLogger.debug(f"At return of parse_projection, children = {children}")
                 if isinstance(children, dict):
-                    def outfunc(obj):
+                    def proj_func(obj):
                         for k, v in children.items():
                             if is_callable(v):
                                 yield k, v(obj)
                             else:
                                 yield k, v
                 else:
-                    outfunc = lambda obj: ((ii, v) if not is_callable(v) else (ii, v(obj)) for ii, v in enumerate(children))
-                return projection(outfunc), ii + 1
+                    proj_func = lambda obj: ((ii, v) if not is_callable(v) else (ii, v(obj)) for ii, v in enumerate(children))
+                return projection(proj_func), ii + 1
             if nt['value'] != ',':
                 raise RemesParserException("Values or key-value pairs in a projection must be comma-separated", ii, query)
         else:
@@ -763,10 +782,17 @@ def parse_projection(query, ii):
     raise RemesParserException("Unterminated projection", len(query)-1, query)
 
 
-def search(query, obj):
+@lru_cache(maxsize=64)
+def compile_query(query):
+    '''Compiles a remespath query. Uses an LRU cache to store the 64
+most recent distinct remespath queries.'''    
     toks = tokenize(query)
     result = parse_expr_or_scalar_func(toks, 0)
-    resval = result[0]['value']
+    return result[0]['value']
+
+
+def search(query, obj):
+    resval = compile_query(query)
     if is_callable(resval):
         return resval(obj)
     return resval
@@ -1405,7 +1431,7 @@ class RemesPathTester(unittest.TestCase):
                     mismatches += f'with query {syntax}, {result} != {correct_out}'
             except Exception as ex:
                 mismatches += f'with query {syntax}, {str(ex)} != {correct_out}\n'
-        self.assertTrue(bool(mismatches), msg=mismatches)
+        self.assertEqual(mismatches, '', msg=mismatches)
 
     def test_search_arg_function_scalar_query_result(self):
         self.assertEqual(search("str(@.foo)", {'foo': 1}), '1')
@@ -1417,10 +1443,18 @@ class RemesPathTester(unittest.TestCase):
         self.assertEqual(search('(@.foo).bar', {'foo': {'bar': 1}}), 1)
 
     def test_search_idx_parens_dot(self):
-        self.assertEqual(search('(@[0]).a', [{'a': 1, 'b': 2}, {'a': 3, 'b': 4}]), 2)
+        self.assertEqual(search('(@[0]).a', [{'a': 1, 'b': 2}, {'a': 3, 'b': 4}]), 1)
 
     def test_search_idx_parens_idx(self):
-        self.assertEqual(search('(@[:1])[1:]', [[1,2],[3,4]]), [[2]])
+        # this is one case where it makes more sense for (x[idxrs])[idxrs_2]
+        # to be different from x[idxrs][idxrs_2].
+        # Basically, the parens can be thought of as returning a new expr,
+        # and the indexer after the parentheses is acting on the return value
+        # from the indexer(s) inside the parentheses.
+        # If the indexers in the parentheses weren't wrapped in parens,
+        # the final indexer would instead be acting on each separate value
+        # of the final layer from the previous indexers.
+        self.assertEqual(search('(@[:1])[1:]', [[1,2],[3,4]]), [])
 
     ###############
     ## projections
@@ -1451,6 +1485,18 @@ class RemesPathTester(unittest.TestCase):
 
     def test_projection_obj_parens_then_dot(self):
         self.assertEqual(search("(@{foo: @[0], bar: @[1]}).foo", [1,2]), 1)
+        
+    def test_search_double_nested_parens_scalar(self):
+        self.assertEqual(search("((1*2))", []), 2)
+        
+    def test_search_double_nested_parens_scalar_binop_json(self):
+        self.assertEqual(search("((3**2))+@", [1,2]), [10, 11])
+        
+    def test_search_double_nested_parens_json(self):
+        self.assertEqual(search("((@+2))", [1, 2]), [3, 4])
+        
+    def test_search_double_nested_parens_json_binop_scalar(self):
+        self.assertEqual(search("((@**2))+3", [1, 2]), [4, 7])
 
 
 if __name__ == '__main__':
