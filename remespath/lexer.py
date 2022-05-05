@@ -14,7 +14,7 @@ MASTER_REGEX = re.compile(
     r'[gj]?`(?:[^`]|(?<=\\)`)*(?<!\\)`|' # backtick string with optional g or j prefix
     r'\[|\]|\(|\)|\{|\}' # close and open parens, squarebraces, and curlybraces
     '|(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][-+]?\\d+)?' # numbers
-    '|,|:|\.|@|' # commas, colons, periods, '@' symbol
+    '|,|:|\.{1,2}|@|' # commas, colons, periods, double dots, '@' symbol
     '[a-zA-Z_][a-zA-Z_0-9]*)' # unquoted_string
 )
 
@@ -23,7 +23,7 @@ num_match = re.compile(("(-?(?:0|[1-9]\d*))"   # any int or 0
                 "([eE][-+]?\d+)?" # optional scientific notation
                 )).match
 NUM_START_CHARS = set('0123456789')
-DELIMITERS = set(',[](){}.:')
+DELIMITERS = set(',[](){}.:') | {'..'}
 
 
 def tokenize(query):
@@ -34,7 +34,7 @@ def tokenize(query):
         if c == '@':
             out.append(cur_json())
         elif c in DELIMITERS:
-            out.append(delim(c))
+            out.append(delim(t))
         elif c == '`':
             out.append(string(t[1:-1].replace('\\`', '`')))
         elif c in NUM_START_CHARS:
@@ -106,6 +106,7 @@ class RemesPathLexerTester(unittest.TestCase):
             ('null // str(true)', [null_node(), binop_function(*BINOPS['//']), arg_function(FUNCTIONS['str']), delim('('), bool_node(True), delim(')')]),
             ('b9 _c ', [string('b9'), string('_c')]),
             ('Infinity', [num(float('inf'))]),
+            ('@..*', [cur_json(), delim('..'), binop_function(*BINOPS['*'])]),
         ]:
             with self.subTest(query_example=query_example,correct_out=correct_out):
                 # print(get_tokens(query_example))

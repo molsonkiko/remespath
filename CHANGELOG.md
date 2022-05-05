@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 - Improve performance, probably by reducing memory copy during boolean indexing
 
+## [0.3.0] - 2022-05-05
+
+Until further notice, performance is not appreciably faster than 0.2.0.
+
+### Added
+
+- `*` operator for getting all dict keys (also works for getting all array indices, but you could do that with `[:]` before anyway)
+
 ## [0.2.0] - 2022-05-05
 
 Appears to be bug-free for most if not all reasonable queries. Passes the full test suite.

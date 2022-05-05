@@ -97,11 +97,11 @@ If no function supplied, defaults to the identity function.'''
 
 
 def delim(value):
-    '''any one of ,()[]{}:.'''
+    '''.. or any one of ,()[]{}:.'''
     return {'type': 'delim', 'value': value}
 
 
-INDEXER_SUBTYPES = {'slicer_list', 'varname_list', 'boolean_index', 'star_indexer_list'}
+INDEXER_SUBTYPES = {'slicer_list', 'varname_list', 'boolean_index', 'star_indexer'}
 
 
 def int_node(value):
@@ -144,8 +144,8 @@ def slicer_list(slicers):
     return {'type': 'slicer_list', 'children': slicers}
 
 
-def star_indexer_list():
-    return {'type': 'star_indexer_list', 'children': None}
+def star_indexer():
+    return {'type': 'star_indexer', 'value': None}
 
 
 def string(value):
@@ -174,7 +174,7 @@ AST_TOK_BUILDER_MAP = {
     'slicer_list': slicer_list,
     'string': string,
     'varname_list': varname_list,
-    'star_indexer_list': star_indexer_list,
+    'star_indexer': star_indexer,
 }
 
 AST_TYPE_BUILDER_MAP = {

@@ -1,11 +1,7 @@
 '''
-TODO:
-1. Figure out formal ABNF description of query language
-2. Finish building parser
-    a. add support for projections
-    b. make indexers work
-    c. allow for indexing within expr functions
-3. Add querying function
+TODO (may never be done, so don't hold your breath):
+1. Add recursion with the ".." syntax of JSONpath
+2. Add assignment operators, e.g. "@[@ > 0] -= 1": DDL, basically
 
 An attempt to combine the querying power of gorp.jsonpath with the intuitive
 syntax of R dataframe indexing.
@@ -88,7 +84,7 @@ string_match = re.compile("[a-zA-Z_][a-zA-Z_0-9]*").match
 
 EXPR_FUNC_ENDERS = {']', ':', '}', ',', ')'}
 # these tokens have high enough precedence to stop an expr_function or scalar_function
-INDEXER_STARTERS = {'.', '[', '{'}
+INDEXER_STARTERS = {'.', '[', '{', '..'}
 
 
 def is_callable(x):
@@ -186,6 +182,12 @@ def apply_boolean_index(inds):
 def apply_regex_index(obj, regex):
     return ((k, v) for k, v in obj.items() if regex.search(k))
 
+
+def apply_star_indexer(obj):
+    if isinstance(obj, dict):
+        return iter(obj.items())
+    return enumerate(obj)
+    
 
 def apply_indexer_list(indexers):
     '''recursively search an object to match indexers'''
@@ -388,7 +390,7 @@ def apply_arg_function(func, out_types, is_vectorized, *args): # inp, *args):
     # the following is if it's NOT vectorized
     if x_callable:
         if other_callables:
-            return ast_tok_builder(lambda inp: func(x(inp), *[a if not is_callable(a) else a(inp) for a in other_args]))
+            return ast_tok_builder(lambda inp: func(xval(inp), *[a if not is_callable(a) else a(inp) for a in other_args]))
         return ast_tok_builder(lambda inp: func(xval(inp), *other_args))
     elif other_callables:
         return ast_tok_builder(lambda inp: func(xval, *[a if not is_callable(a) else a(inp) for a in other_args]))
@@ -444,7 +446,7 @@ def parse_indexer(query, ii):
         if nt:
             if nt['type'] == 'binop' and nt['value'][0] == operator.mul:
                 # it's a '*', which means all keys.
-                return star_indexer_list()
+                return star_indexer(), ii + 2
             elif nt['type'] not in VARNAME_SUBTYPES:
                 raise RemesParserException("'.' syntax for indexers only allows a single key or regex as indexer", ii, query)
         return varname_list([nt['value']]), ii + 2
@@ -457,6 +459,12 @@ def parse_indexer(query, ii):
     last_tok = None
     last_type = None
     ii += 1
+    if query[ii]['type'] == 'binop' and query[ii]['value'][0] == operator.mul:
+        # it was a *, indicating a star indexer
+        next_tok = peek_next_token(query, ii)
+        if next_tok['type'] == 'delim' and next_tok['value'] == ']':
+            return star_indexer(), ii + 2
+        raise RemesParserException("Unacceptable first token '*' for indexer list", ii, query)
     while ii < len(query):
         t = query[ii]
         typ, tv = t['type'], t.get('value')
@@ -582,6 +590,8 @@ Does not resolve binops.'''
                     idx_func = children
                 else:
                     idx_func = lambda obj: children
+            elif ixtype == 'star_indexer':
+                idx_func = apply_star_indexer
             else:
                 # it's a boolean index based on the current object (a cur_json)
                 # something like [@.bar <= @.baz]
@@ -709,7 +719,7 @@ grammar, because it is agnostic about the types of arguments received
             if 'slicer' in type_options and tv == ':':
                 cur_arg, ii = parse_slicer(query, ii, cur_arg)
                 ii += 1
-            if cur_arg is None or cur_arg['type'] not in type_options:
+            if cur_arg is None or cur_arg['type'] not in type_options and cur_arg['type'] != 'cur_json':
                 argtype = None if cur_arg is None else cur_arg['type']
                 raise RemesParserException(f"For arg {arg_num} of function {func.__name__}, expected argument of a type in {type_options}, instead got type {argtype}")
         except Exception as ex:
@@ -1497,6 +1507,39 @@ class RemesPathTester(unittest.TestCase):
         
     def test_search_double_nested_parens_json_binop_scalar(self):
         self.assertEqual(search("((@**2))+3", [1, 2]), [4, 7])
+        
+    def test_search_avg(self):
+        self.assertEqual(search("avg(@)", [1,2,3]), 2)
+        
+    def test_search_index(self):
+        self.assertEqual(search("index(@, 2)", [1, 2, 3, 4, 2]), 1)
+        
+    def test_search_index_reverse(self):
+        self.assertEqual(search("index(@, 2, true)", [1, 2, 3, 4, 2]), 4)
+        
+    def test_search_arg_function_scalar_cur_json_arg(self):
+        self.assertEqual(search("irange(len(@))", [1,2,3]), [0,1,2])
+        
+    def test_search_arg_function_scalar_cur_json_second_arg(self):
+        self.assertEqual(search("index(@, max(@))", [1,2]), 1)
+        
+    def test_search_star_dot(self):
+        self.assertEqual(search("@.*", {'foo': 1, 'bar': 2, 'baz': 3}), {'foo': 1, 'bar': 2, 'baz': 3})
+        
+    def test_search_star_sqbk(self):
+        self.assertEqual(search("@[*]", [1,2,3]), [1,2,3])
+        
+    def test_search_star_sqbk_after_dot(self):
+        self.assertEqual(search("@.foo[*]", {'foo': [1,2,3]}), [1,2,3])
+        
+    def test_search_star_dot_after_slicer_list(self):
+        self.assertEqual(search("@[:1].*", [{'foo': 1, 'bar': 2}, {'foo': 2, 'bar': 3}]), [{'foo': 1, 'bar': 2}])
+        
+    def test_search_star_dot_then_dot(self):
+        self.assertEqual(search("@.*.foo", {'bar': {'foo': 1, 'quz': 2}, 'baz': {'foo': 2, 'quz': 3}}), {'bar': 1, 'baz': 2})
+    
+    def test_search_star_sqbk_then_dot(self):
+        self.assertEqual(search("@[*].foo", [{'foo': 1}, {'foo': 2}]), [1, 2])
 
 
 if __name__ == '__main__':

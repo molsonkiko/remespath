@@ -32,6 +32,14 @@ def max_by(x, key):
 
 def min_by(x, key):
     return min(x, key=lambda x: x[key])
+    
+def mean(x):
+    return sum(x)/len(x)
+    
+def index(arr, elt, reverse):
+    if reverse:
+        return len(arr) - 1 - arr[::-1].index(elt)
+    return arr.index(elt)
 
 def sort_func(x, reverse):
     if reverse is None:
@@ -175,7 +183,9 @@ class ArgFunction(typing.NamedTuple):
 
 
 FUNCTIONS = {
+    'avg': ArgFunction(mean, 'num', 1, 1, [EXPR_SUBTYPES], False),
     'flatten': ArgFunction(flatten, 'expr', 1, 2, [EXPR_SUBTYPES, {'int'}], False),
+    'index': ArgFunction(index, 'int', 2, 3, [EXPR_SUBTYPES, SCALAR_SUBTYPES, 'bool'], False),
     'irange': ArgFunction(irange, 'expr', 1, 3, [{'int'}, {'int'}, {'int'}], False),
     'keys': ArgFunction(keys, 'expr', 1, 1, [EXPR_SUBTYPES], False),
     'len': ArgFunction(len, 'int', 1, inf, [EXPR_SUBTYPES], False),
@@ -221,3 +231,5 @@ FUNCTIONS = {
 
 for meth in ['lower', 'upper', 'strip']:
     FUNCTIONS[f's_{meth}'] = ArgFunction(getattr(str, meth), ['expr', 'string'], 1, 1, [EXPR_SUBTYPES | {'string'}], True)
+    
+FUNCTIONS['mean'] = FUNCTIONS['avg']
